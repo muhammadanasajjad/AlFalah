@@ -1,5 +1,6 @@
 package com.primaveradev.alfalah;
 
+import android.content.res.AssetManager;
 import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
@@ -15,7 +16,7 @@ public class MainActivity extends AppCompatActivity {
         System.loadLibrary("alfalah");
     }
 
-    public native void nativeOnSurfaceCreated();
+    public native void nativeOnSurfaceCreated(AssetManager assetManager);
     public native void nativeOnSurfaceChanged(int width, int height);
     public native void nativeOnDrawFrame();
 
@@ -33,7 +34,7 @@ public class MainActivity extends AppCompatActivity {
         glView.setRenderer(new GLSurfaceView.Renderer() {
             @Override
             public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-                nativeOnSurfaceCreated();
+                nativeOnSurfaceCreated(getAssets());
             }
 
             @Override

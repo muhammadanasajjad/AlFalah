@@ -1,27 +1,23 @@
 #include "Renderer.hpp"
 #include <android/log.h>
+#include <string>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "RENDERER", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RENDERER", __VA_ARGS__)
 
-static const char* vs = R"(#version 300 es
-layout(location = 0) in vec2 aPos;
-
-void main()
+static std::string ReadAsset(AAssetManager* mgr, const char* path)
 {
-    gl_Position = vec4(aPos, 0.0, 1.0);
+    AAsset* asset = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
+    if (!asset) {
+        LOGE("failed to open asset: %s", path);
+        return {};
+    }
+    const void* data = AAsset_getBuffer(asset);
+    off_t len = AAsset_getLength(asset);
+    std::string result(static_cast<const char*>(data), len);
+    AAsset_close(asset);
+    return result;
 }
-)";
-
-static const char* fs = R"(#version 300 es
-precision mediump float;
-out vec4 color;
-
-void main()
-{
-    color = vec4(0.2, 0.8, 0.2, 1.0);
-}
-)";
 
 static GLuint Compile(GLenum type, const char* src)
 {
@@ -69,14 +65,38 @@ void Renderer::Destroy()
     program = 0;
     vbo = 0;
     vao = 0;
+    uResolution = -1;
+    uColor = -1;
+    uRect = -1;
+    uCorners = -1;
+}
+
+void Renderer::SetAssetManager(AAssetManager* mgr)
+{
+    assetManager = mgr;
 }
 
 void Renderer::Init()
 {
     Destroy();
 
-    GLuint v = Compile(GL_VERTEX_SHADER, vs);
-    GLuint f = Compile(GL_FRAGMENT_SHADER, fs);
+    if (!assetManager) {
+        LOGE("no asset manager set");
+        return;
+    }
+
+    std::string vsSrc = ReadAsset(assetManager, "shaders/rect.vert.glsl");
+    std::string fsSrc = ReadAsset(assetManager, "shaders/rect.frag.glsl");
+    if (vsSrc.empty() || fsSrc.empty()) {
+        LOGE("failed to load shader sources");
+        return;
+    }
+
+    const char* vss = vsSrc.c_str();
+    const char* fss = fsSrc.c_str();
+
+    GLuint v = Compile(GL_VERTEX_SHADER, vss);
+    GLuint f = Compile(GL_FRAGMENT_SHADER, fss);
     if (!v || !f) {
         if (v) glDeleteShader(v);
         if (f) glDeleteShader(f);
@@ -93,6 +113,11 @@ void Renderer::Init()
         return;
     }
 
+    uResolution = glGetUniformLocation(program, "uResolution");
+    uColor = glGetUniformLocation(program, "uColor");
+    uRect = glGetUniformLocation(program, "uRect");
+    uCorners = glGetUniformLocation(program, "uCorners");
+
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
 
@@ -103,29 +128,35 @@ void Renderer::Init()
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
 
-    LOGI("init ok (program=%u)", program);
+    LOGI("init ok (program=%u, uResolution=%d)", program, uResolution);
 }
 
 void Renderer::Resize(int width, int height)
 {
+    this->width = width;
+    this->height = height;
     glViewport(0, 0, width, height);
 }
 
 void Renderer::BeginFrame()
 {
-    glClearColor(0.08f, 0.08f, 1.0f, 1.0f);
+    glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (!program) return;
     glUseProgram(program);
     glBindVertexArray(vao);
+
+    if (uResolution >= 0)
+        glUniform2f(uResolution, (float)width, (float)height);
 }
 
 void Renderer::EndFrame()
 {
 }
 
-void Renderer::DrawRect(float x, float y, float w, float h)
+void Renderer::DrawRect(float x, float y, float w, float h,
+                        float tl, float tr, float br, float bl)
 {
     if (!program) return;
 
@@ -138,6 +169,13 @@ void Renderer::DrawRect(float x, float y, float w, float h)
             x + w, y + h,
             x,     y + h
     };
+
+    if (uColor >= 0)
+        glUniform4f(uColor, 0.2f, 0.8f, 0.2f, 1.0f);
+    if (uRect >= 0)
+        glUniform4f(uRect, x, y, w, h);
+    if (uCorners >= 0)
+        glUniform4f(uCorners, tl, tr, br, bl);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
