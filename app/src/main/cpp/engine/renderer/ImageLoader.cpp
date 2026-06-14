@@ -8,7 +8,8 @@
 #include "../../third_party/lodepng/lodepng.h"
 
 AAssetManager* ImageLoader::sMgr = nullptr;
-std::unordered_map<std::string, GLuint> ImageLoader::sCache;
+std::unordered_map<std::string, ImageInfo> ImageLoader::sCache;
+std::unordered_map<GLuint, std::pair<int, int>> ImageLoader::sTexToDims;
 
 void ImageLoader::Init(AAssetManager* mgr)
 {
@@ -19,15 +20,32 @@ void* ImageLoader::Get(const char* path)
 {
     auto it = sCache.find(path);
     if (it != sCache.end())
-        return (void*)(uintptr_t)it->second;
+        return (void*)(uintptr_t)it->second.texture;
 
-    GLuint tex = Load(path);
-    if (tex)
-        sCache[path] = tex;
-    return (void*)(uintptr_t)tex;
+    ImageInfo info;
+    info.texture = Load(path, &info.width, &info.height);
+    if (info.texture) {
+        sCache[path] = info;
+        sTexToDims[info.texture] = { info.width, info.height };
+    }
+    return (void*)(uintptr_t)info.texture;
 }
 
-GLuint ImageLoader::Load(const char* path)
+int ImageLoader::GetWidth(const char* path)
+{
+    auto it = sCache.find(path);
+    if (it == sCache.end()) return 0;
+    return it->second.width;
+}
+
+int ImageLoader::GetHeight(const char* path)
+{
+    auto it = sCache.find(path);
+    if (it == sCache.end()) return 0;
+    return it->second.height;
+}
+
+GLuint ImageLoader::Load(const char* path, int* outW, int* outH)
 {
     if (!sMgr) {
         LOGE("ImageLoader not initialised with AAssetManager");
@@ -66,14 +84,38 @@ GLuint ImageLoader::Load(const char* path)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     LOGI("loaded texture %u from %s (%ux%u)", tex, path, w, h);
+
+    if (outW) *outW = (int)w;
+    if (outH) *outH = (int)h;
     return tex;
+}
+
+void ImageLoader::FixAspectRatios(Clay_RenderCommandArray& commands)
+{
+    for (int32_t i = 0; i < commands.length; ++i) {
+        Clay_RenderCommand& cmd = commands.internalArray[i];
+        if (cmd.commandType != CLAY_RENDER_COMMAND_TYPE_IMAGE) continue;
+        if (!cmd.renderData.image.imageData) continue;
+
+        GLuint tex = (GLuint)(uintptr_t)cmd.renderData.image.imageData;
+        auto it = sTexToDims.find(tex);
+        if (it == sTexToDims.end()) continue;
+
+        float imgW = (float)it->second.first;
+        float imgH = (float)it->second.second;
+        if (imgW == 0) continue;
+
+        float w = cmd.boundingBox.width;
+        cmd.boundingBox.height = w * (imgH / imgW);
+    }
 }
 
 void ImageLoader::Destroy()
 {
     for (auto& kv : sCache) {
-        if (kv.second)
-            glDeleteTextures(1, &kv.second);
+        if (kv.second.texture)
+            glDeleteTextures(1, &kv.second.texture);
     }
     sCache.clear();
+    sTexToDims.clear();
 }

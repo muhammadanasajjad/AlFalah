@@ -17,6 +17,11 @@ static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
 static float g_density = 1.0f;
 static float g_statusBarHeightDp = 0;
+static Clay_Color bg = { 19, 19, 10, 255 };
+static Clay_Color bg1 = { 31, 31, 22, 255 };
+static Clay_Color accent = { 0, 128, 66, 255 };
+static Clay_Color accent1 = { 2, 100, 53, 255 };
+static Clay_Color fg = { 255, 255, 255, 255 };
 
 static const char* kFontPaths[] = {
     "/system/fonts/NotoSans-Regular.ttf",
@@ -140,10 +145,127 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                     .childGap = 12,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
-                .backgroundColor = { 255, 60, 80, 255 },
-                .clip = { .horizontal = true, .vertical = true }
+                .backgroundColor = bg,
             }
         ) {
+            CLAY(
+                CLAY_ID("TopRowContainer"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0) },
+                        .childGap = 24,
+                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                    }
+                }
+            ) {
+                CLAY(
+                    CLAY_ID("QuranButtonContainer"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(250) },
+                            .padding = CLAY_PADDING_ALL(24),
+                            .childGap = 12,
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        },
+                        .backgroundColor = bg1,
+                        .cornerRadius = {24, 24, 24, 24},
+                        .clip = { .horizontal = true, .vertical = true }
+                    },
+                ) {
+                    CLAY_TEXT(
+                        CLAY_STRING("Qur'an"),
+                        CLAY_TEXT_CONFIG({
+                             .textColor = fg,
+                             .fontId = 0,
+                             .fontSize = 24,
+                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        })
+                    );
+                    CLAY_TEXT(
+                        CLAY_STRING("Read and explore\nthe Qur'an"),
+                        CLAY_TEXT_CONFIG({
+                             .textColor = fg,
+                             .fontId = 0,
+                             .fontSize = 12,
+                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                         })
+                    );
+                    CLAY(
+                        CLAY_ID("QuranImage"),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_PERCENT(0.70), CLAY_SIZING_FIXED(70) }
+                            },
+                            .cornerRadius = { 8, 8, 8, 8 },
+                            .image = { .imageData = ImageLoader::Get("images/quran.png") },
+                            .floating = {
+                                .offset = { 10, 10 },
+                                .attachPoints = {
+                                    .element = CLAY_ATTACH_POINT_RIGHT_BOTTOM,
+                                    .parent = CLAY_ATTACH_POINT_RIGHT_BOTTOM,
+                                },
+                                .attachTo = CLAY_ATTACH_TO_PARENT,
+                            },
+                        }
+                    ) {}
+                }
+
+                CLAY(
+                    CLAY_ID("TasbihAlbumsContainer"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(0) },
+                            .childGap = 24,
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        },
+                    }
+                ) {
+                    CLAY(
+                        CLAY_ID("TasbihContainer"),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                                .padding = CLAY_PADDING_ALL(24),
+                            },
+                            .backgroundColor = bg1,
+                            .cornerRadius = {24, 24, 24, 24},
+                            .clip = { .horizontal = true, .vertical = true }
+                        },
+                    ) {
+                        CLAY_TEXT(
+                            CLAY_STRING("Tasbih"),
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = fg,
+                                 .fontId = 0,
+                                 .fontSize = 24,
+                                 .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            })
+                        );
+                    }
+
+                    CLAY(
+                        CLAY_ID("AlbumsContainer"),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                                .padding = CLAY_PADDING_ALL(24),
+                            },
+                            .backgroundColor = bg1,
+                            .cornerRadius = {24, 24, 24, 24},
+                            .clip = { .horizontal = true, .vertical = true }
+                        },
+                    ) {
+                        CLAY_TEXT(
+                            CLAY_STRING("Albums"),
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = fg,
+                                 .fontId = 0,
+                                 .fontSize = 24,
+                                 .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            })
+                        );}
+                }
+            }
             // Tall child that gets clipped by parent
             CLAY(
                 CLAY_ID("TallChild"),
@@ -159,7 +281,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                     CLAY_ID("TestImage"),
                     {
                         .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0),  }
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(100) }
                         },
                         .cornerRadius = { 8, 8, 8, 8 },
                         .image = { .imageData = ImageLoader::Get("images/tasbih.png") }
@@ -167,17 +289,10 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 ) {}
             }
 
-            CLAY_TEXT(
-                CLAY_STRING("Hello World"),
-                CLAY_TEXT_CONFIG({
-                    .textColor = { 255, 255, 255, 255 },
-                    .fontId = 0,
-                    .fontSize = 30,
-                })
-            );
         }
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
+    ImageLoader::FixAspectRatios(commands);
 
     g_clayRenderer.Render(commands);
 
