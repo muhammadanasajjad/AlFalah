@@ -1,30 +1,94 @@
 #include <jni.h>
+#include <android/log.h>
 #include <android/asset_manager_jni.h>
 #include <malloc.h>
 #include "engine/renderer/Renderer.hpp"
 #include "engine/renderer/ClayRenderer.hpp"
+#include "engine/renderer/FontAtlas.hpp"
+#include "engine/renderer/ImageLoader.hpp"
 #include "third_party/clay/clay.h"
+
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NATIVE", __VA_ARGS__)
 
 static Renderer g_renderer;
 static ClayRenderer g_clayRenderer;
+static FontAtlas g_fontAtlas;
 static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
+static float g_density = 1.0f;
+static float g_statusBarHeightDp = 0;
 
-static Clay_Dimensions MeasureText(Clay_StringSlice, Clay_TextElementConfig*, void*)
+static const char* kFontPaths[] = {
+    "/system/fonts/NotoSans-Regular.ttf",
+    "/system/fonts/Roboto-Regular.ttf",
+    "/system/fonts/RobotoCondensed-Regular.ttf",
+    "/system/fonts/Roboto-Light.ttf",
+    "/system/fonts/DroidSans.ttf",
+};
+
+static Clay_Dimensions MeasureText(Clay_StringSlice text,
+                                   Clay_TextElementConfig* config,
+                                   void*)
 {
-    return { 0, 0 };
+    if (!config) return { 0, 0 };
+    g_fontAtlas.SetSize((float)config->fontSize * g_density);
+
+    hb_font_t* hbFont = g_fontAtlas.GetHbFont();
+    if (!hbFont) return { 0, 0 };
+
+    hb_buffer_t* buf = hb_buffer_create();
+    hb_buffer_add_utf8(buf, text.chars, text.length, 0, text.length);
+    hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
+    hb_buffer_set_script(buf, HB_SCRIPT_LATIN);
+    hb_buffer_set_language(buf, hb_language_from_string("en", 2));
+    hb_shape(hbFont, buf, nullptr, 0);
+
+    unsigned int count = 0;
+    hb_glyph_info_t* info = hb_buffer_get_glyph_infos(buf, &count);
+    hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
+
+    float total = 0;
+    for (unsigned int i = 0; i < count; ++i)
+        total += (float)pos[i].x_advance / 64.0f;
+
+    hb_buffer_destroy(buf);
+
+    return { total / g_density, g_fontAtlas.GetLineHeight() / g_density };
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
-        JNIEnv* env, jobject, jobject assetManager)
+        JNIEnv* env, jobject, jobject assetManager, jfloat density)
 {
+    g_density = density;
+
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
     g_renderer.SetAssetManager(mgr);
     g_renderer.Init();
 
     g_clayRenderer.Init(mgr);
+    g_clayRenderer.SetDensity(g_density);
+
+    ImageLoader::Init(mgr);
+
+    // Load font from system paths
+    bool fontOk = false;
+    for (const char* fp : kFontPaths) {
+        if (g_fontAtlas.LoadFromFile(fp, (float)(16 * g_density))) {
+            fontOk = true;
+            break;
+        }
+    }
+    // Fallback: bundled font in APK assets
+    if (!fontOk && g_fontAtlas.Load(mgr, "fonts/Roboto-Regular.ttf", (float)(16 * g_density))) {
+        fontOk = true;
+    }
+    if (fontOk) {
+        g_clayRenderer.SetFontAtlas(&g_fontAtlas);
+    } else {
+        LOGE("ALL FONT LOADING FAILED — no text will render");
+    }
 
     if (!g_clayArena) {
         g_clayArenaSize = Clay_MinMemorySize();
@@ -43,7 +107,14 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceChanged(
 {
     g_renderer.Resize(w, h);
     g_clayRenderer.SetResolution(w, h);
-    Clay_SetLayoutDimensions((Clay_Dimensions){ (float)w, (float)h });
+    Clay_SetLayoutDimensions((Clay_Dimensions){ (float)w / g_density, (float)h / g_density });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_primaveradev_alfalah_MainActivity_nativeSetStatusBarHeight(
+        JNIEnv*, jobject, jfloat heightDp)
+{
+    g_statusBarHeightDp = heightDp;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -54,34 +125,55 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
 
     Clay_BeginLayout();
     {
+        // Demo: overflow hidden container
         CLAY(
-            CLAY_ID("Panel"),
+            CLAY_ID("Cropper"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(200) },
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .padding = {
+                            .left = 24,
+                            .right = 24,
+                            .top = (uint16_t)(24 + (int)g_statusBarHeightDp),
+                            .bottom = 24
+                    },
+                    .childGap = 12,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                    .padding = CLAY_PADDING_ALL(16)
                 },
-                .backgroundColor = { 255, 60, 80, 255 }
+                .backgroundColor = { 255, 60, 80, 255 },
+                .clip = { .horizontal = true, .vertical = true }
             }
         ) {
+            // Tall child that gets clipped by parent
             CLAY(
-                CLAY_ID("Child"),
+                CLAY_ID("TallChild"),
                 {
                     .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) }
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(300) }
                     },
-                    .backgroundColor = { 120, 80, 60, 255 },
-                    .cornerRadius = { 100, 100, 25, 25 }
+                    .backgroundColor = { 255, 255, 60, 255 },
+                    .cornerRadius = { 12, 12, 12, 12 }
                 }
-            ) {}
+            ) {
+                CLAY(
+                    CLAY_ID("TestImage"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0),  }
+                        },
+                        .cornerRadius = { 8, 8, 8, 8 },
+                        .image = { .imageData = ImageLoader::Get("images/tasbih.png") }
+                    }
+                ) {}
+            }
+
             CLAY_TEXT(
-                    CLAY_STRING("Hello World"),
-                    CLAY_TEXT_CONFIG({
-                                             .textColor = { 255, 255, 255, 255 },
-                                             .fontSize = 18,
-                                             .fontId = 0
-                                     })
+                CLAY_STRING("Hello World"),
+                CLAY_TEXT_CONFIG({
+                    .textColor = { 255, 255, 255, 255 },
+                    .fontId = 0,
+                    .fontSize = 30,
+                })
             );
         }
     }

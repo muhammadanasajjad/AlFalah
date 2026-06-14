@@ -16,9 +16,10 @@ public class MainActivity extends AppCompatActivity {
         System.loadLibrary("alfalah");
     }
 
-    public native void nativeOnSurfaceCreated(AssetManager assetManager);
+    public native void nativeOnSurfaceCreated(AssetManager assetManager, float density);
     public native void nativeOnSurfaceChanged(int width, int height);
     public native void nativeOnDrawFrame();
+    public native void nativeSetStatusBarHeight(float heightDp);
 
     private GLSurfaceView glView;
 
@@ -34,7 +35,11 @@ public class MainActivity extends AppCompatActivity {
         glView.setRenderer(new GLSurfaceView.Renderer() {
             @Override
             public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-                nativeOnSurfaceCreated(getAssets());
+                float density = getResources().getDisplayMetrics().density;
+                nativeOnSurfaceCreated(getAssets(), density);
+                int statusBarId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+                int px = statusBarId > 0 ? getResources().getDimensionPixelSize(statusBarId) : 0;
+                nativeSetStatusBarHeight(px / density);
             }
 
             @Override
