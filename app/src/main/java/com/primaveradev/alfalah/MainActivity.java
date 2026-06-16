@@ -4,6 +4,7 @@ import android.content.res.AssetManager;
 import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
+import android.view.MotionEvent;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -20,6 +21,7 @@ public class MainActivity extends AppCompatActivity {
     public native void nativeOnSurfaceChanged(int width, int height);
     public native void nativeOnDrawFrame();
     public native void nativeSetStatusBarHeight(float heightDp);
+    public native void nativeOnTouch(float x, float y, boolean down);
 
     private GLSurfaceView glView;
 
@@ -51,6 +53,13 @@ public class MainActivity extends AppCompatActivity {
             public void onDrawFrame(GL10 gl) {
                 nativeOnDrawFrame();
             }
+        });
+
+        glView.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
+            nativeOnTouch(event.getX(), event.getY(),
+                    action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE);
+            return true;
         });
 
         setContentView(glView);

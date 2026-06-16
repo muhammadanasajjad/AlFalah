@@ -8,6 +8,7 @@ class FontAtlas;
 
 struct ScissorRect {
     int x, y, w, h;
+    Clay_CornerRadius cornerRadius;
 };
 
 class ClayRenderer {
@@ -28,8 +29,9 @@ private:
     void DrawBorder(float x, float y, float w, float h, const Clay_BorderRenderData& border);
     void DrawText(const Clay_RenderCommand& cmd);
 
-    void PushScissor(int x, int y, int w, int h);
+    void PushScissor(int x, int y, int w, int h, Clay_CornerRadius cornerRadius);
     void PopScissor();
+    void ApplyClipUniforms(bool isText);
 
     // Rect / image / border program
     GLuint program = 0;
@@ -41,6 +43,9 @@ private:
     GLint uCorners = -1;
     GLint uTexture = -1;
     GLint uUseTexture = -1;
+    GLint uClipRect = -1;
+    GLint uClipCorners = -1;
+    GLint uClipEnabled = -1;
 
     // Text program
     GLuint textProgram = 0;
@@ -49,6 +54,9 @@ private:
     GLint tuViewport = -1;
     GLint tuColor = -1;
     GLint tuFontAtlas = -1;
+    GLint tuClipRect = -1;
+    GLint tuClipCorners = -1;
+    GLint tuClipEnabled = -1;
 
     FontAtlas* fontAtlas = nullptr;
     int width = 0;

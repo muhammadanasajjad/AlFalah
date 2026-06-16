@@ -2,6 +2,9 @@
 #include <android/log.h>
 #include <android/asset_manager_jni.h>
 #include <malloc.h>
+#include <vector>
+#include <string>
+#include <cstring>
 #include "engine/renderer/Renderer.hpp"
 #include "engine/renderer/ClayRenderer.hpp"
 #include "engine/renderer/FontAtlas.hpp"
@@ -9,8 +12,8 @@
 #include "third_party/clay/clay.h"
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NATIVE", __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "NATIVE", __VA_ARGS__)
 
-static Renderer g_renderer;
 static ClayRenderer g_clayRenderer;
 static FontAtlas g_fontAtlas;
 static uint64_t g_clayArenaSize = 0;
@@ -30,6 +33,14 @@ static const char* kFontPaths[] = {
     "/system/fonts/Roboto-Light.ttf",
     "/system/fonts/DroidSans.ttf",
 };
+
+enum class Page { Home, Quran };
+static Page g_currentPage = Page::Home;
+
+static Clay_Vector2 g_pointerPos = {0, 0};
+static bool g_pointerDown = false;
+static bool g_wasPointerDown = false;
+static float g_deltaTime = 0.016f;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                    Clay_TextElementConfig* config,
@@ -69,8 +80,8 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
 
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
-    g_renderer.SetAssetManager(mgr);
-    g_renderer.Init();
+//    g_renderer.SetAssetManager(mgr);
+//    g_renderer.Init();
 
     g_clayRenderer.Init(mgr);
     g_clayRenderer.SetDensity(g_density);
@@ -110,7 +121,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceChanged(
         JNIEnv*, jobject, jint w, jint h)
 {
-    g_renderer.Resize(w, h);
+//    g_renderer.Resize(w, h);
     g_clayRenderer.SetResolution(w, h);
     Clay_SetLayoutDimensions((Clay_Dimensions){ (float)w / g_density, (float)h / g_density });
 }
@@ -123,54 +134,64 @@ Java_com_primaveradev_alfalah_MainActivity_nativeSetStatusBarHeight(
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
-        JNIEnv*, jobject)
+Java_com_primaveradev_alfalah_MainActivity_nativeOnTouch(
+        JNIEnv*, jobject, jfloat x, jfloat y, jboolean down)
 {
-    g_renderer.BeginFrame();
+    g_pointerPos.x = x / g_density;
+    g_pointerPos.y = y / g_density;
+    g_pointerDown = down;
+}
 
-    Clay_BeginLayout();
-    {
-        // Demo: overflow hidden container
+static void LayoutHomePage()
+{
+    CLAY(
+        CLAY_ID("Root"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .padding = {
+                        .left = 24,
+                        .right = 24,
+                        .top = (uint16_t)(24 + (int)g_statusBarHeightDp),
+                        .bottom = 24
+                },
+                .childGap = 24,
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            },
+            .backgroundColor = bg,
+        }
+    ) {
         CLAY(
-            CLAY_ID("Cropper"),
+            CLAY_ID("TopRowContainer"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
-                    .padding = {
-                            .left = 24,
-                            .right = 24,
-                            .top = (uint16_t)(24 + (int)g_statusBarHeightDp),
-                            .bottom = 24
-                    },
-                    .childGap = 12,
-                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                },
-                .backgroundColor = bg,
+                    .sizing = { CLAY_SIZING_GROW(0) },
+                    .childGap = 24,
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                }
             }
         ) {
             CLAY(
-                CLAY_ID("TopRowContainer"),
+                CLAY_ID("QuranButtonContainer"),
                 {
                     .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0) },
-                        .childGap = 24,
-                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                    }
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(250) },
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {24, 24, 24, 24},
+                    .clip = { .horizontal = true, .vertical = true },
                 }
             ) {
                 CLAY(
-                    CLAY_ID("QuranButtonContainer"),
+                    CLAY_ID("QuranText"),
                     {
                         .layout = {
-                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(250) },
-                            .padding = CLAY_PADDING_ALL(24),
+                            .padding = { .left = 24, .top = 24 },
                             .childGap = 12,
                             .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                        },
-                        .backgroundColor = bg1,
-                        .cornerRadius = {24, 24, 24, 24},
-                        .clip = { .horizontal = true, .vertical = true }
-                    },
+                        }
+                    }
                 ) {
                     CLAY_TEXT(
                         CLAY_STRING("Qur'an"),
@@ -181,6 +202,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
                         })
                     );
+
                     CLAY_TEXT(
                         CLAY_STRING("Read and explore\nthe Qur'an"),
                         CLAY_TEXT_CONFIG({
@@ -188,49 +210,69 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                              .fontId = 0,
                              .fontSize = 12,
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                         })
+                        })
                     );
+                }
+
+                CLAY(
+                    CLAY_ID("ImageRow"),
+                    {
+                        .layout = {
+                            .sizing = {
+                                CLAY_SIZING_GROW(1),
+                                CLAY_SIZING_FIXED(70)
+                            },
+                            .padding = {.left = 8},
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        }
+                    }
+                ) {
                     CLAY(
                         CLAY_ID("QuranImage"),
                         {
                             .layout = {
-                                .sizing = { CLAY_SIZING_PERCENT(0.70), CLAY_SIZING_FIXED(70) }
+                                .sizing = {
+                                    CLAY_SIZING_PERCENT(1.20),
+                                }
                             },
-                            .cornerRadius = { 8, 8, 8, 8 },
-                            .image = { .imageData = ImageLoader::Get("images/quran.png") },
-                            .floating = {
-                                .offset = { 10, 10 },
-                                .attachPoints = {
-                                    .element = CLAY_ATTACH_POINT_RIGHT_BOTTOM,
-                                    .parent = CLAY_ATTACH_POINT_RIGHT_BOTTOM,
-                                },
-                                .attachTo = CLAY_ATTACH_TO_PARENT,
-                            },
+                            .cornerRadius = {8,8,8,8},
+                            .image = {
+                                .imageData = ImageLoader::Get("images/quran.png")
+                            }
                         }
                     ) {}
                 }
+            }
 
+            CLAY(
+                CLAY_ID("TasbihAlbumsContainer"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(0) },
+                        .childGap = 24,
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    },
+                }
+            ) {
                 CLAY(
-                    CLAY_ID("TasbihAlbumsContainer"),
+                    CLAY_ID("TasbihContainer"),
                     {
                         .layout = {
-                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(0) },
-                            .childGap = 24,
+                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
                             .layoutDirection = CLAY_TOP_TO_BOTTOM,
                         },
-                    }
+                        .backgroundColor = bg1,
+                        .cornerRadius = {24, 24, 24, 24},
+                        .clip = { .horizontal = true, .vertical = true }
+                    },
                 ) {
                     CLAY(
-                        CLAY_ID("TasbihContainer"),
+                        CLAY_ID("TasbihText"),
                         {
                             .layout = {
-                                .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
-                                .padding = CLAY_PADDING_ALL(24),
-                            },
-                            .backgroundColor = bg1,
-                            .cornerRadius = {24, 24, 24, 24},
-                            .clip = { .horizontal = true, .vertical = true }
-                        },
+                                    .padding = {.left = 24, .top = 24}
+                            }
+                        }
                     ) {
                         CLAY_TEXT(
                             CLAY_STRING("Tasbih"),
@@ -239,21 +281,57 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                  .fontId = 0,
                                  .fontSize = 24,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                            })
+                             })
                         );
                     }
-
                     CLAY(
-                        CLAY_ID("AlbumsContainer"),
+                        CLAY_ID("TasbihImageRow"),
                         {
                             .layout = {
-                                .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
-                                .padding = CLAY_PADDING_ALL(24),
+                                .sizing = {
+                                    CLAY_SIZING_GROW(1),
+                                    CLAY_SIZING_FIXED(60)
+                                },
+                                .padding = {.left = 20, .right = 10, .top = 15},
+                                .layoutDirection = CLAY_TOP_TO_BOTTOM,
                             },
-                            .backgroundColor = bg1,
-                            .cornerRadius = {24, 24, 24, 24},
-                            .clip = { .horizontal = true, .vertical = true }
+                        }
+                    ) {
+                        CLAY(
+                            CLAY_ID("TasbihImage"),
+                            {
+                                .layout = {
+                                    .sizing = {
+                                        CLAY_SIZING_GROW(1),
+                                    }
+                                },
+                                .image = {
+                                    .imageData = ImageLoader::Get("images/tasbih.png")
+                                }
+                            }
+                        ) {}
+                    }
+                }
+
+                CLAY(
+                    CLAY_ID("AlbumsContainer"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
                         },
+                        .backgroundColor = bg1,
+                        .cornerRadius = {24, 24, 24, 24},
+                        .clip = { .horizontal = true, .vertical = true }
+                    },
+                ) {
+                    CLAY(
+                        CLAY_ID("AlbumsText"),
+                        {
+                            .layout = {
+                                .padding = {.left = 24, .top = 24}
+                            }
+                        }
                     ) {
                         CLAY_TEXT(
                             CLAY_STRING("Albums"),
@@ -262,39 +340,309 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                  .fontId = 0,
                                  .fontSize = 24,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                            })
-                        );}
+                             })
+                        );
+                    }
+                    CLAY(
+                        CLAY_ID("AlbumsImageRow"),
+                        {
+                            .layout = {
+                                .sizing = {
+                                    CLAY_SIZING_GROW(1),
+                                    CLAY_SIZING_FIXED(60)
+                                },
+                                .padding = {.left = 20, .right = 10, .top = 15},
+                                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                            },
+                        }
+                    ) {
+                        CLAY(
+                            CLAY_ID("AlbumsImage"),
+                            {
+                                .layout = {
+                                    .sizing = {
+                                        CLAY_SIZING_GROW(1),
+                                    }
+                                },
+                                .image = {
+                                    .imageData = ImageLoader::Get("images/tasbih.png")
+                                }
+                            }
+                        ) {}
+                    }
                 }
             }
-            // Tall child that gets clipped by parent
+        }
+
+        CLAY(
+            CLAY_ID("TimesStatsContainer"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED((250 - 24) / 2) },
+                    .childGap = 24,
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                },
+            }
+        ) {
             CLAY(
-                CLAY_ID("TallChild"),
+                CLAY_ID("TimesContainer"),
                 {
                     .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(300) }
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
                     },
-                    .backgroundColor = { 255, 255, 60, 255 },
-                    .cornerRadius = { 12, 12, 12, 12 }
-                }
+                    .backgroundColor = bg1,
+                    .cornerRadius = {24, 24, 24, 24},
+                    .clip = { .horizontal = true, .vertical = true }
+                },
             ) {
                 CLAY(
-                    CLAY_ID("TestImage"),
+                    CLAY_ID("TimesText"),
                     {
                         .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(100) }
-                        },
-                        .cornerRadius = { 8, 8, 8, 8 },
-                        .image = { .imageData = ImageLoader::Get("images/tasbih.png") }
+                            .padding = {.left = 24, .top = 24}
+                        }
                     }
-                ) {}
+                ) {
+                    CLAY_TEXT(
+                        CLAY_STRING("Times"),
+                        CLAY_TEXT_CONFIG({
+                             .textColor = fg,
+                             .fontId = 0,
+                             .fontSize = 24,
+                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                         })
+                    );
+                }
+                CLAY(
+                    CLAY_ID("TimesImageRow"),
+                    {
+                        .layout = {
+                            .sizing = {
+                                CLAY_SIZING_GROW(1),
+                                CLAY_SIZING_FIXED(60)
+                            },
+                            .padding = {.left = 20, .right = 10, .top = 15},
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        },
+                    }
+                ) {
+                    CLAY(
+                        CLAY_ID("TimesImage"),
+                        {
+                            .layout = {
+                                .sizing = {
+                                        CLAY_SIZING_GROW(1),
+                                }
+                            },
+                            .image = {
+                                .imageData = ImageLoader::Get("images/tasbih.png")
+                            }
+                        }
+                    ) {}
+                }
             }
 
+            CLAY(
+                CLAY_ID("StatsContainer"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {24, 24, 24, 24},
+                    .clip = { .horizontal = true, .vertical = true }
+                },
+            ) {
+                CLAY(
+                    CLAY_ID("StatsText"),
+                    {
+                        .layout = {
+                            .padding = {.left = 24, .top = 24}
+                        }
+                    }
+                ) {
+                    CLAY_TEXT(
+                        CLAY_STRING("Stats"),
+                        CLAY_TEXT_CONFIG({
+                             .textColor = fg,
+                             .fontId = 0,
+                             .fontSize = 24,
+                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                         })
+                    );
+                }
+                CLAY(
+                    CLAY_ID("StatsImageRow"),
+                    {
+                        .layout = {
+                            .sizing = {
+                                CLAY_SIZING_GROW(1),
+                                CLAY_SIZING_FIXED(60)
+                            },
+                            .padding = {.left = 20, .right = 10, .top = 15},
+                            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        },
+                    }
+                ) {
+                    CLAY(
+                        CLAY_ID("StatsImage"),
+                        {
+                            .layout = {
+                                .sizing = {
+                                    CLAY_SIZING_GROW(1),
+                                }
+                            },
+                            .image = {
+                                .imageData = ImageLoader::Get("images/tasbih.png")
+                            }
+                        }
+                    ) {}
+                }
+            }
+        }
+    }
+}
+
+static void LayoutQuranPage()
+{
+    static constexpr int kNumAyahs = 100;
+    static std::vector<std::string> ayahLines;
+    static std::vector<Clay_String> ayahStrings;
+    if (ayahLines.empty()) {
+        ayahLines.reserve(kNumAyahs);
+        ayahStrings.reserve(kNumAyahs);
+        for (int i = 1; i <= kNumAyahs; ++i) {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "Ayah %d — In the name of Allah, the Most Gracious, the Most Merciful.", i);
+            ayahLines.emplace_back(buf);
+        }
+        for (auto& s : ayahLines) {
+            ayahStrings.push_back({
+                .isStaticallyAllocated = false,
+                .length = (int)s.length(),
+                .chars = s.c_str()
+            });
+        }
+    }
+
+    CLAY(
+        CLAY_ID("Root"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .padding = {
+                        .left = 24,
+                        .right = 24,
+                        .top = (uint16_t)(24 + (int)g_statusBarHeightDp),
+                        .bottom = 24
+                },
+                .childGap = 24,
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            },
+            .backgroundColor = bg,
+        }
+    ) {
+        CLAY(
+            CLAY_ID("QuranBackButton"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
+                },
+                .backgroundColor = Clay_Hovered() ? accent : bg1,
+                .cornerRadius = {12, 12, 12, 12},
+            }
+        ) {
+            CLAY_TEXT(
+                CLAY_STRING("← Back"),
+                CLAY_TEXT_CONFIG({
+                    .textColor = fg,
+                    .fontId = 0,
+                    .fontSize = 18,
+                    .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                })
+            );
+        }
+
+        CLAY(
+            CLAY_ID("QuranScrollContainer"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .childGap = 16,
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                },
+                .backgroundColor = bg1,
+                .cornerRadius = {24, 24, 24, 24},
+                .clip = {
+                    .horizontal = true,
+                    .vertical = true,
+                    .childOffset = Clay_GetScrollOffset()
+                },
+            }
+        ) {
+            for (int i = 0; i < kNumAyahs; ++i) {
+                CLAY(
+                    CLAY_IDI("AyahRow", (uint32_t)i),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(36) },
+                            .padding = {.left = 20, .right = 20},
+                        }
+                    }
+                ) {
+                    CLAY_TEXT(
+                        ayahStrings[i],
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = 0,
+                            .fontSize = 14,
+                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
+        JNIEnv*, jobject)
+{
+    Clay_SetPointerState(g_pointerPos, g_pointerDown);
+    Clay_UpdateScrollContainers(true, (Clay_Vector2){0, 0}, g_deltaTime);
+
+    Clay_BeginLayout();
+    {
+        switch (g_currentPage) {
+            case Page::Home:
+                LayoutHomePage();
+                break;
+            case Page::Quran:
+                LayoutQuranPage();
+                break;
         }
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
+
+    if (g_wasPointerDown && !g_pointerDown) {
+        switch (g_currentPage) {
+            case Page::Home:
+                if (Clay_PointerOver(CLAY_ID("QuranButtonContainer"))) {
+                    g_currentPage = Page::Quran;
+                }
+                break;
+            case Page::Quran:
+                if (Clay_PointerOver(CLAY_ID("QuranBackButton"))) {
+                    g_currentPage = Page::Home;
+                }
+                break;
+        }
+    }
+    g_wasPointerDown = g_pointerDown;
+
     ImageLoader::FixAspectRatios(commands);
-
     g_clayRenderer.Render(commands);
-
-    g_renderer.EndFrame();
 }

@@ -86,6 +86,9 @@ void ClayRenderer::InitTextProgram(AAssetManager* mgr)
     tuViewport = glGetUniformLocation(textProgram, "uViewport");
     tuColor = glGetUniformLocation(textProgram, "uColor");
     tuFontAtlas = glGetUniformLocation(textProgram, "uFontAtlas");
+    tuClipRect = glGetUniformLocation(textProgram, "uClipRect");
+    tuClipCorners = glGetUniformLocation(textProgram, "uClipCorners");
+    tuClipEnabled = glGetUniformLocation(textProgram, "uClipEnabled");
 
     glGenVertexArrays(1, &textVAO);
     glBindVertexArray(textVAO);
@@ -145,6 +148,9 @@ void ClayRenderer::Init(AAssetManager* mgr)
     uCorners = glGetUniformLocation(program, "uCorners");
     uTexture = glGetUniformLocation(program, "uTexture");
     uUseTexture = glGetUniformLocation(program, "uUseTexture");
+    uClipRect = glGetUniformLocation(program, "uClipRect");
+    uClipCorners = glGetUniformLocation(program, "uClipCorners");
+    uClipEnabled = glGetUniformLocation(program, "uClipEnabled");
 
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
@@ -168,12 +174,14 @@ void ClayRenderer::Destroy()
     if (vao) glDeleteVertexArrays(1, &vao);
     program = 0; vbo = 0; vao = 0;
     uResolution = uColor = uRect = uCorners = uTexture = uUseTexture = -1;
+    uClipRect = uClipCorners = uClipEnabled = -1;
 
     if (textProgram) glDeleteProgram(textProgram);
     if (textVBO) glDeleteBuffers(1, &textVBO);
     if (textVAO) glDeleteVertexArrays(1, &textVAO);
     textProgram = 0; textVBO = 0; textVAO = 0;
     tuViewport = tuColor = tuFontAtlas = -1;
+    tuClipRect = tuClipCorners = tuClipEnabled = -1;
 
     fontAtlas = nullptr;
     scissorStack.clear();
@@ -194,7 +202,7 @@ void ClayRenderer::SetDensity(float d)
     density = d;
 }
 
-void ClayRenderer::PushScissor(int x, int y, int w, int h)
+void ClayRenderer::PushScissor(int x, int y, int w, int h, Clay_CornerRadius cornerRadius)
 {
     if (!scissorStack.empty()) {
         const ScissorRect& p = scissorStack.back();
@@ -207,7 +215,7 @@ void ClayRenderer::PushScissor(int x, int y, int w, int h)
         w = std::max(0, r1 - x);
         h = std::max(0, b1 - y);
     }
-    scissorStack.push_back({ x, y, w, h });
+    scissorStack.push_back({ x, y, w, h, cornerRadius });
     glEnable(GL_SCISSOR_TEST);
     glScissor(x, height - y - h, w, h);
 }
@@ -225,6 +233,28 @@ void ClayRenderer::PopScissor()
     }
 }
 
+void ClayRenderer::ApplyClipUniforms(bool isText)
+{
+    GLint locRect    = isText ? tuClipRect    : uClipRect;
+    GLint locCorners = isText ? tuClipCorners : uClipCorners;
+    GLint locEnabled = isText ? tuClipEnabled : uClipEnabled;
+
+    if (scissorStack.empty()) {
+        if (locEnabled >= 0) glUniform1i(locEnabled, 0);
+        return;
+    }
+
+    const ScissorRect& top = scissorStack.back();
+
+    if (locEnabled >= 0) glUniform1i(locEnabled, 1);
+    if (locRect >= 0)
+        glUniform4f(locRect, (float)top.x, (float)top.y, (float)top.w, (float)top.h);
+    if (locCorners >= 0)
+        glUniform4f(locCorners,
+                    top.cornerRadius.topLeft * density, top.cornerRadius.topRight * density,
+                    top.cornerRadius.bottomRight * density, top.cornerRadius.bottomLeft * density);
+}
+
 void ClayRenderer::Render(const Clay_RenderCommandArray& commands)
 {
     if (!program) return;
@@ -234,73 +264,91 @@ void ClayRenderer::Render(const Clay_RenderCommandArray& commands)
         const Clay_BoundingBox& bb = cmd.boundingBox;
 
         switch (cmd.commandType) {
-        case CLAY_RENDER_COMMAND_TYPE_RECTANGLE:
-            glUseProgram(program);
-            glBindVertexArray(vao);
-            if (uUseTexture >= 0)
-                glUniform1i(uUseTexture, 0);
-            if (uResolution >= 0)
-                glUniform2f(uResolution, (float)width, (float)height);
-            DrawRect(bb.x, bb.y, bb.width, bb.height,
-                     cmd.renderData.rectangle.backgroundColor,
-                     cmd.renderData.rectangle.cornerRadius);
-            break;
+            case CLAY_RENDER_COMMAND_TYPE_RECTANGLE:
+                glUseProgram(program);
+                glBindVertexArray(vao);
+                if (uUseTexture >= 0)
+                    glUniform1i(uUseTexture, 0);
+                if (uResolution >= 0)
+                    glUniform2f(uResolution, (float)width, (float)height);
+                ApplyClipUniforms(false);
+                DrawRect(bb.x, bb.y, bb.width, bb.height,
+                         cmd.renderData.rectangle.backgroundColor,
+                         cmd.renderData.rectangle.cornerRadius);
+                break;
 
-        case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
-            GLuint tex = (GLuint)(uintptr_t)cmd.renderData.image.imageData;
-            if (!tex) break;
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glUseProgram(program);
-            glBindVertexArray(vao);
-            if (uUseTexture >= 0)
-                glUniform1i(uUseTexture, 1);
-            if (uTexture >= 0)
-                glUniform1i(uTexture, 0);
-            if (uResolution >= 0)
-                glUniform2f(uResolution, (float)width, (float)height);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            DrawImage(bb.x, bb.y, bb.width, bb.height, tex,
-                      cmd.renderData.image.backgroundColor,
-                      cmd.renderData.image.cornerRadius);
-            glDisable(GL_BLEND);
-            break;
-        }
+            case CLAY_RENDER_COMMAND_TYPE_IMAGE: {
+                GLuint tex = (GLuint)(uintptr_t)cmd.renderData.image.imageData;
+                if (!tex) break;
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glUseProgram(program);
+                glBindVertexArray(vao);
+                if (uUseTexture >= 0)
+                    glUniform1i(uUseTexture, 1);
+                if (uTexture >= 0)
+                    glUniform1i(uTexture, 0);
+                if (uResolution >= 0)
+                    glUniform2f(uResolution, (float)width, (float)height);
+                ApplyClipUniforms(false);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                DrawImage(bb.x, bb.y, bb.width, bb.height, tex,
+                          cmd.renderData.image.backgroundColor,
+                          cmd.renderData.image.cornerRadius);
+                glDisable(GL_BLEND);
+                break;
+            }
 
-        case CLAY_RENDER_COMMAND_TYPE_BORDER:
-            glUseProgram(program);
-            glBindVertexArray(vao);
-            if (uUseTexture >= 0)
-                glUniform1i(uUseTexture, 0);
-            if (uResolution >= 0)
-                glUniform2f(uResolution, (float)width, (float)height);
-            DrawBorder(bb.x, bb.y, bb.width, bb.height,
-                       cmd.renderData.border);
-            break;
+            case CLAY_RENDER_COMMAND_TYPE_BORDER:
+                glUseProgram(program);
+                glBindVertexArray(vao);
+                if (uUseTexture >= 0)
+                    glUniform1i(uUseTexture, 0);
+                if (uResolution >= 0)
+                    glUniform2f(uResolution, (float)width, (float)height);
+                ApplyClipUniforms(false);
+                DrawBorder(bb.x, bb.y, bb.width, bb.height,
+                           cmd.renderData.border);
+                break;
 
-        case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-            int sx = (int)(bb.x * density);
-            int sy = (int)(bb.y * density);
-            int sw = (int)(bb.width * density);
-            int sh = (int)(bb.height * density);
-            PushScissor(sx, sy, sw, sh);
-            break;
-        }
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
+                int sx = (int)(bb.x * density);
+                int sy = (int)(bb.y * density);
+                int sw = (int)(bb.width * density);
+                int sh = (int)(bb.height * density);
 
-        case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END:
-            PopScissor();
-            break;
+                Clay_CornerRadius radius = {0, 0, 0, 0};
 
-        case CLAY_RENDER_COMMAND_TYPE_TEXT:
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            DrawText(cmd);
-            glDisable(GL_BLEND);
-            break;
+                // Look ahead for this element's own RECTANGLE command
+                for (int32_t j = i + 1; j < commands.length; ++j) {
+                    const Clay_RenderCommand& future = commands.internalArray[j];
+                    if (future.commandType == CLAY_RENDER_COMMAND_TYPE_SCISSOR_END)
+                        break; // left this element's subtree without finding it
+                    if (future.commandType == CLAY_RENDER_COMMAND_TYPE_RECTANGLE &&
+                        future.id == cmd.id) {
+                        radius = future.renderData.rectangle.cornerRadius;
+                        break;
+                    }
+                }
 
-        default:
-            break;
+                PushScissor(sx, sy, sw, sh, radius);
+                break;
+            }
+
+            case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END:
+                PopScissor();
+                break;
+
+            case CLAY_RENDER_COMMAND_TYPE_TEXT:
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                DrawText(cmd);
+                glDisable(GL_BLEND);
+                break;
+
+            default:
+                break;
         }
     }
 }
@@ -312,17 +360,17 @@ void ClayRenderer::DrawRect(float x, float y, float w, float h, Clay_Color color
     float rw = w * density, rh = h * density;
 
     float verts[] = {
-        rx,     ry,
-        rx + rw, ry,
-        rx + rw, ry + rh,
-        rx,     ry,
-        rx + rw, ry + rh,
-        rx,     ry + rh
+            rx,     ry,
+            rx + rw, ry,
+            rx + rw, ry + rh,
+            rx,     ry,
+            rx + rw, ry + rh,
+            rx,     ry + rh
     };
 
     if (uColor >= 0)
         glUniform4f(uColor, color.r / 255.0f, color.g / 255.0f,
-                            color.b / 255.0f, color.a / 255.0f);
+                    color.b / 255.0f, color.a / 255.0f);
     if (uRect >= 0)
         glUniform4f(uRect, rx, ry, rw, rh);
     if (uCorners >= 0)
@@ -341,17 +389,17 @@ void ClayRenderer::DrawImage(float x, float y, float w, float h, GLuint texture,
     float rw = w * density, rh = h * density;
 
     float verts[] = {
-        rx,     ry,
-        rx + rw, ry,
-        rx + rw, ry + rh,
-        rx,     ry,
-        rx + rw, ry + rh,
-        rx,     ry + rh
+            rx,     ry,
+            rx + rw, ry,
+            rx + rw, ry + rh,
+            rx,     ry,
+            rx + rw, ry + rh,
+            rx,     ry + rh
     };
 
     if (uColor >= 0)
         glUniform4f(uColor, tint.r / 255.0f, tint.g / 255.0f,
-                            tint.b / 255.0f, tint.a / 255.0f);
+                    tint.b / 255.0f, tint.a / 255.0f);
     if (uRect >= 0)
         glUniform4f(uRect, rx, ry, rw, rh);
     if (uCorners >= 0)
@@ -391,16 +439,14 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
 
     fontAtlas->SetSize((float)textData.fontSize * density);
 
-    // Gather glyph quads
     std::vector<float> verts;
-    verts.reserve(256 * 4 * 4); // 6 verts per glyph, 4 floats per vert
+    verts.reserve(256 * 4 * 4);
 
     float x0 = cmd.boundingBox.x * density;
     float y0 = cmd.boundingBox.y * density;
     float baselineX = x0;
     float baselineY = y0 + fontAtlas->GetAscender();
 
-    // Use a small buffer for UTF-8 decoding
     uint32_t codepoint;
     int pos = 0;
     while (pos < str.length) {
@@ -440,12 +486,12 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
 
         if (gw > 0 && gh > 0) {
             float q[] = {
-                gx,     gy,     g->u0, g->v0,
-                gx+gw,  gy,     g->u1, g->v0,
-                gx+gw,  gy+gh,  g->u1, g->v1,
-                gx,     gy,     g->u0, g->v0,
-                gx+gw,  gy+gh,  g->u1, g->v1,
-                gx,     gy+gh,  g->u0, g->v1,
+                    gx,     gy,     g->u0, g->v0,
+                    gx+gw,  gy,     g->u1, g->v0,
+                    gx+gw,  gy+gh,  g->u1, g->v1,
+                    gx,     gy,     g->u0, g->v0,
+                    gx+gw,  gy+gh,  g->u1, g->v1,
+                    gx,     gy+gh,  g->u0, g->v1,
             };
             verts.insert(verts.end(), q, q + 24);
         }
@@ -458,11 +504,13 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
     glUseProgram(textProgram);
     glBindVertexArray(textVAO);
 
+    ApplyClipUniforms(true);
+
     if (tuViewport >= 0)
         glUniform2f(tuViewport, (float)width, (float)height);
     if (tuColor >= 0)
         glUniform4f(tuColor, c.r / 255.0f, c.g / 255.0f,
-                             c.b / 255.0f, c.a / 255.0f);
+                    c.b / 255.0f, c.a / 255.0f);
     if (tuFontAtlas >= 0)
         glUniform1i(tuFontAtlas, 0);
 
