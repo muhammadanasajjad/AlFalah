@@ -17,6 +17,7 @@ public:
     void Destroy();
     void SetResolution(int width, int height);
     void SetFontAtlas(FontAtlas* atlas);
+    void SetFontAtlas(uint16_t fontId, FontAtlas* atlas);
     void SetDensity(float d);
     void Render(const Clay_RenderCommandArray& commands);
 
@@ -58,7 +59,8 @@ private:
     GLint tuClipCorners = -1;
     GLint tuClipEnabled = -1;
 
-    FontAtlas* fontAtlas = nullptr;
+    static constexpr int kMaxFontAtlases = 4;
+    FontAtlas* fontAtlases[kMaxFontAtlases] = {};
     int width = 0;
     int height = 0;
     float density = 1.0f;

@@ -16,6 +16,7 @@
 
 static ClayRenderer g_clayRenderer;
 static FontAtlas g_fontAtlas;
+static FontAtlas g_arabicFontAtlas;
 static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
 static float g_density = 1.0f;
@@ -43,20 +44,33 @@ static bool g_wasPointerDown = false;
 static float g_deltaTime = 0.016f;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
-                                   Clay_TextElementConfig* config,
-                                   void*)
+                                    Clay_TextElementConfig* config,
+                                    void*)
 {
     if (!config) return { 0, 0 };
-    g_fontAtlas.SetSize((float)config->fontSize * g_density);
 
-    hb_font_t* hbFont = g_fontAtlas.GetHbFont();
+    FontAtlas* atlas = &g_fontAtlas;
+    hb_direction_t dir = HB_DIRECTION_LTR;
+    hb_script_t script = HB_SCRIPT_LATIN;
+    const char* lang = "en";
+
+    if (config->fontId == 1) {
+        atlas = &g_arabicFontAtlas;
+        dir = HB_DIRECTION_RTL;
+        script = HB_SCRIPT_ARABIC;
+        lang = "ar";
+    }
+
+    atlas->SetSize((float)config->fontSize * g_density);
+
+    hb_font_t* hbFont = atlas->GetHbFont();
     if (!hbFont) return { 0, 0 };
 
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, text.chars, text.length, 0, text.length);
-    hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
-    hb_buffer_set_script(buf, HB_SCRIPT_LATIN);
-    hb_buffer_set_language(buf, hb_language_from_string("en", 2));
+    hb_buffer_set_direction(buf, dir);
+    hb_buffer_set_script(buf, script);
+    hb_buffer_set_language(buf, hb_language_from_string(lang, 2));
     hb_shape(hbFont, buf, nullptr, 0);
 
     unsigned int count = 0;
@@ -69,7 +83,7 @@ static Clay_Dimensions MeasureText(Clay_StringSlice text,
 
     hb_buffer_destroy(buf);
 
-    return { total / g_density, g_fontAtlas.GetLineHeight() / g_density };
+    return { total / g_density, atlas->GetLineHeight() / g_density };
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -101,7 +115,12 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
         fontOk = true;
     }
     if (fontOk) {
-        g_clayRenderer.SetFontAtlas(&g_fontAtlas);
+        g_clayRenderer.SetFontAtlas(0, &g_fontAtlas);
+        bool arabicOk = g_arabicFontAtlas.Load(mgr, "fonts/quranicFonts/qpc/p1.ttf", (float)(16 * g_density));
+        if (arabicOk) {
+            g_clayRenderer.SetFontAtlas(1, &g_arabicFontAtlas);
+            LOGI("loaded Arabic font");
+        }
     } else {
         LOGE("ALL FONT LOADING FAILED — no text will render");
     }
@@ -555,7 +574,7 @@ static void LayoutQuranPage()
             }
         ) {
             CLAY_TEXT(
-                CLAY_STRING("← Back"),
+                CLAY_STRING("<- Back"),
                 CLAY_TEXT_CONFIG({
                     .textColor = fg,
                     .fontId = 0,
@@ -569,14 +588,13 @@ static void LayoutQuranPage()
             CLAY_ID("QuranScrollContainer"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .sizing = { CLAY_SIZING_FIT(100), CLAY_SIZING_GROW(0) },
                     .childGap = 16,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
                 .backgroundColor = bg1,
                 .cornerRadius = {24, 24, 24, 24},
                 .clip = {
-                    .horizontal = true,
                     .vertical = true,
                     .childOffset = Clay_GetScrollOffset()
                 },
@@ -587,17 +605,17 @@ static void LayoutQuranPage()
                     CLAY_IDI("AyahRow", (uint32_t)i),
                     {
                         .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(36) },
+                            .sizing = { CLAY_SIZING_GROW(0) },
                             .padding = {.left = 20, .right = 20},
                         }
                     }
                 ) {
                     CLAY_TEXT(
-                        ayahStrings[i],
+                        CLAY_STRING("ﱁ ﱂ ﱃ ﱄ ﱅ"),
                         CLAY_TEXT_CONFIG({
                             .textColor = fg,
-                            .fontId = 0,
-                            .fontSize = 14,
+                            .fontId = 1,
+                            .fontSize = 32,
                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
                         })
                     );

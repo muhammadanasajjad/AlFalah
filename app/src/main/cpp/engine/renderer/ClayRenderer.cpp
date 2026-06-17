@@ -183,7 +183,7 @@ void ClayRenderer::Destroy()
     tuViewport = tuColor = tuFontAtlas = -1;
     tuClipRect = tuClipCorners = tuClipEnabled = -1;
 
-    fontAtlas = nullptr;
+    for (auto& fa : fontAtlases) fa = nullptr;
     scissorStack.clear();
 }
 
@@ -194,7 +194,13 @@ void ClayRenderer::SetResolution(int w, int h)
 
 void ClayRenderer::SetFontAtlas(FontAtlas* atlas)
 {
-    fontAtlas = atlas;
+    fontAtlases[0] = atlas;
+}
+
+void ClayRenderer::SetFontAtlas(uint16_t fontId, FontAtlas* atlas)
+{
+    if (fontId < kMaxFontAtlases)
+        fontAtlases[fontId] = atlas;
 }
 
 void ClayRenderer::SetDensity(float d)
@@ -431,72 +437,118 @@ void ClayRenderer::DrawBorder(float x, float y, float w, float h,
 
 void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
 {
-    if (!textProgram || !fontAtlas) return;
+    if (!textProgram) return;
 
     const Clay_TextRenderData& textData = cmd.renderData.text;
+    uint16_t fid = textData.fontId;
+    if (fid >= kMaxFontAtlases || !fontAtlases[fid])
+        fid = 0;
+    FontAtlas* atlas = fontAtlases[fid];
+    if (!atlas) return;
+
     Clay_StringSlice str = textData.stringContents;
     Clay_Color c = textData.textColor;
 
-    fontAtlas->SetSize((float)textData.fontSize * density);
+    atlas->SetSize((float)textData.fontSize * density);
 
     std::vector<float> verts;
     verts.reserve(256 * 4 * 4);
 
     float x0 = cmd.boundingBox.x * density;
     float y0 = cmd.boundingBox.y * density;
-    float baselineX = x0;
-    float baselineY = y0 + fontAtlas->GetAscender();
+    float baselineY = y0 + atlas->GetAscender();
 
-    uint32_t codepoint;
+    // For RTL text (fontId 1 = Arabic), render in reverse visual order
+    bool rtl = (fid == 1);
+
+    std::vector<uint32_t> codepoints;
+    codepoints.reserve(str.length);
     int pos = 0;
     while (pos < str.length) {
         unsigned char lead = (unsigned char)str.chars[pos];
+        uint32_t cp;
         if (lead < 0x80) {
-            codepoint = lead;
+            cp = lead;
             pos += 1;
         } else if (lead < 0xE0) {
-            codepoint = lead & 0x1F;
+            cp = lead & 0x1F;
             if (pos + 1 < str.length)
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
             pos += 2;
         } else if (lead < 0xF0) {
-            codepoint = lead & 0x0F;
+            cp = lead & 0x0F;
             if (pos + 2 < str.length) {
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 2] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 2] & 0x3F);
             }
             pos += 3;
         } else {
-            codepoint = lead & 0x07;
+            cp = lead & 0x07;
             if (pos + 3 < str.length) {
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 2] & 0x3F);
-                codepoint = (codepoint << 6) | ((unsigned char)str.chars[pos + 3] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 1] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 2] & 0x3F);
+                cp = (cp << 6) | ((unsigned char)str.chars[pos + 3] & 0x3F);
             }
             pos += 4;
         }
+        codepoints.push_back(cp);
+    }
 
-        const GlyphInfo* g = fontAtlas->GetGlyph(codepoint);
-        if (!g) continue;
-
-        float gx = baselineX + g->bearingX;
-        float gy = baselineY - g->bearingY;
-        float gw = g->width;
-        float gh = g->height;
-
-        if (gw > 0 && gh > 0) {
-            float q[] = {
-                    gx,     gy,     g->u0, g->v0,
-                    gx+gw,  gy,     g->u1, g->v0,
-                    gx+gw,  gy+gh,  g->u1, g->v1,
-                    gx,     gy,     g->u0, g->v0,
-                    gx+gw,  gy+gh,  g->u1, g->v1,
-                    gx,     gy+gh,  g->u0, g->v1,
-            };
-            verts.insert(verts.end(), q, q + 24);
+    if (rtl) {
+        float totalAdvance = 0;
+        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it) {
+            const GlyphInfo* g = atlas->GetGlyph(*it);
+            if (g) totalAdvance += g->advanceX;
         }
+        float baselineX = x0 + cmd.boundingBox.width * density - totalAdvance;
 
-        baselineX += g->advanceX;
+        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it) {
+            const GlyphInfo* g = atlas->GetGlyph(*it);
+            if (!g) continue;
+
+            float gx = baselineX + g->bearingX;
+            float gy = baselineY - g->bearingY;
+            float gw = g->width;
+            float gh = g->height;
+
+            if (gw > 0 && gh > 0) {
+                float q[] = {
+                        gx,     gy,     g->u0, g->v0,
+                        gx+gw,  gy,     g->u1, g->v0,
+                        gx+gw,  gy+gh,  g->u1, g->v1,
+                        gx,     gy,     g->u0, g->v0,
+                        gx+gw,  gy+gh,  g->u1, g->v1,
+                        gx,     gy+gh,  g->u0, g->v1,
+                };
+                verts.insert(verts.end(), q, q + 24);
+            }
+            baselineX += g->advanceX;
+        }
+    } else {
+        float baselineX = x0;
+
+        for (uint32_t cp : codepoints) {
+            const GlyphInfo* g = atlas->GetGlyph(cp);
+            if (!g) continue;
+
+            float gx = baselineX + g->bearingX;
+            float gy = baselineY - g->bearingY;
+            float gw = g->width;
+            float gh = g->height;
+
+            if (gw > 0 && gh > 0) {
+                float q[] = {
+                        gx,     gy,     g->u0, g->v0,
+                        gx+gw,  gy,     g->u1, g->v0,
+                        gx+gw,  gy+gh,  g->u1, g->v1,
+                        gx,     gy,     g->u0, g->v0,
+                        gx+gw,  gy+gh,  g->u1, g->v1,
+                        gx,     gy+gh,  g->u0, g->v1,
+                };
+                verts.insert(verts.end(), q, q + 24);
+            }
+            baselineX += g->advanceX;
+        }
     }
 
     if (verts.empty()) return;
@@ -515,7 +567,7 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
         glUniform1i(tuFontAtlas, 0);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fontAtlas->GetTexture());
+    glBindTexture(GL_TEXTURE_2D, atlas->GetTexture());
 
     glBindBuffer(GL_ARRAY_BUFFER, textVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, verts.size() * sizeof(float), verts.data());
