@@ -9,6 +9,7 @@
 #include "engine/renderer/ClayRenderer.hpp"
 #include "engine/renderer/FontAtlas.hpp"
 #include "engine/renderer/ImageLoader.hpp"
+#include "quran/QuranDatabase.hpp"
 #include "third_party/clay/clay.h"
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NATIVE", __VA_ARGS__)
@@ -42,6 +43,7 @@ static Clay_Vector2 g_pointerPos = {0, 0};
 static bool g_pointerDown = false;
 static bool g_wasPointerDown = false;
 static float g_deltaTime = 0.016f;
+static QuranDatabase g_quranDb;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
@@ -124,6 +126,8 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
     } else {
         LOGE("ALL FONT LOADING FAILED — no text will render");
     }
+
+    g_quranDb.Load(mgr);
 
     if (!g_clayArena) {
         g_clayArenaSize = Clay_MinMemorySize();
@@ -526,16 +530,20 @@ static void LayoutHomePage()
 
 static void LayoutQuranPage()
 {
-    static constexpr int kNumAyahs = 100;
+    static bool sLoaded = false;
     static std::vector<std::string> ayahLines;
     static std::vector<Clay_String> ayahStrings;
-    if (ayahLines.empty()) {
-        ayahLines.reserve(kNumAyahs);
-        ayahStrings.reserve(kNumAyahs);
-        for (int i = 1; i <= kNumAyahs; ++i) {
-            char buf[80];
-            snprintf(buf, sizeof(buf), "Ayah %d — In the name of Allah, the Most Gracious, the Most Merciful.", i);
-            ayahLines.emplace_back(buf);
+    if (!sLoaded) {
+        const Surah& surah = g_quranDb.GetSurah(1);
+        ayahLines.reserve(surah.ayahs.size());
+        ayahStrings.reserve(surah.ayahs.size());
+        for (const auto& ayah : surah.ayahs) {
+            std::string line;
+            for (const auto& w : ayah.words) {
+                if (!line.empty()) line += ' ';
+                line += w.text + " ";
+            }
+            ayahLines.push_back(std::move(line));
         }
         for (auto& s : ayahLines) {
             ayahStrings.push_back({
@@ -544,6 +552,7 @@ static void LayoutQuranPage()
                 .chars = s.c_str()
             });
         }
+        sLoaded = true;
     }
 
     CLAY(
@@ -589,6 +598,7 @@ static void LayoutQuranPage()
             {
                 .layout = {
                     .sizing = { CLAY_SIZING_FIT(100), CLAY_SIZING_GROW(0) },
+                    .padding = CLAY_PADDING_ALL(15),
                     .childGap = 16,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
@@ -600,23 +610,24 @@ static void LayoutQuranPage()
                 },
             }
         ) {
-            for (int i = 0; i < kNumAyahs; ++i) {
+            for (int i = 0; i < (int)ayahStrings.size(); ++i) {
                 CLAY(
                     CLAY_IDI("AyahRow", (uint32_t)i),
                     {
                         .layout = {
                             .sizing = { CLAY_SIZING_GROW(0) },
-                            .padding = {.left = 20, .right = 20},
+                            .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
                         }
                     }
                 ) {
                     CLAY_TEXT(
-                        CLAY_STRING("ﱁ ﱂ ﱃ ﱄ ﱅ"),
+                        ayahStrings[i],
                         CLAY_TEXT_CONFIG({
                             .textColor = fg,
                             .fontId = 1,
-                            .fontSize = 32,
+                            .fontSize = 24,
                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
                         })
                     );
                 }
