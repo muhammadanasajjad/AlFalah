@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "QURAN_DB", __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "QURAN_DB", __VA_ARGS__)
 
 static constexpr const char* kSurahDir = "quran/surahsQPC/";
 
@@ -24,10 +25,77 @@ std::string QuranDatabase::ReadAsset(AAssetManager* mgr, const char* path)
     return result;
 }
 
+void QuranDatabase::BuildPageMap(AAssetManager* mgr)
+{
+    mWordToPage.clear();
+
+    std::string csv = ReadAsset(mgr, "quran/surahsQPC/qpc-v2-15-lines.csv");
+    if (csv.empty()) {
+        LOGE("failed to read page CSV");
+        return;
+    }
+
+    auto parseLine = [](const std::string& line) -> std::vector<std::string> {
+        std::vector<std::string> fields;
+        std::string field;
+        bool inQuotes = false;
+        for (char c : line) {
+            if (c == '"') {
+                inQuotes = !inQuotes;
+            } else if (c == ',' && !inQuotes) {
+                fields.push_back(field);
+                field.clear();
+            } else {
+                field += c;
+            }
+        }
+        fields.push_back(field);
+        return fields;
+    };
+
+    size_t pos = 0;
+    // Skip header line
+    pos = csv.find('\n');
+    if (pos == std::string::npos) return;
+    ++pos;
+
+    while (pos < csv.size()) {
+        size_t end = csv.find('\n', pos);
+        std::string line = csv.substr(pos, end - pos);
+        if (end == std::string::npos) break;
+        pos = end + 1;
+
+        if (line.empty()) continue;
+
+        std::vector<std::string> fields = parseLine(line);
+        if (fields.size() < 6) continue;
+
+        // Columns: page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number
+        const std::string& lineType = fields[2];
+        if (lineType != "ayah") continue;
+
+        const std::string& firstStr = fields[4];
+        const std::string& lastStr = fields[5];
+        if (firstStr.empty() || lastStr.empty()) continue;
+
+        int32_t pageNum = std::stoi(fields[0]);
+        int32_t firstId = std::stoi(firstStr);
+        int32_t lastId = std::stoi(lastStr);
+
+        for (int32_t wid = firstId; wid <= lastId; ++wid) {
+            mWordToPage[wid] = pageNum;
+        }
+    }
+
+    LOGI("built page map: %zu word->page entries", mWordToPage.size());
+}
+
 void QuranDatabase::Load(AAssetManager* mgr)
 {
     mSurahs.clear();
     mSurahs.reserve(114);
+
+    BuildPageMap(mgr);
 
     for (int32_t i = 1; i <= 114; ++i) {
         LoadSurah(mgr, i);
@@ -95,6 +163,10 @@ void QuranDatabase::LoadSurah(AAssetManager* mgr, int32_t surahNumber)
         w.id = wordId;
         w.wordNumber = wordNum;
         w.text = text;
+        auto pgIt = mWordToPage.find(wordId);
+        if (pgIt != mWordToPage.end()) {
+            w.pageNumber = pgIt->second;
+        }
 
         ayahMap[ayahNum].ayahNumber = ayahNum;
         ayahMap[ayahNum].words.push_back(std::move(w));

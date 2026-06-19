@@ -1,6 +1,7 @@
 #include "FontAtlas.hpp"
 #include <android/log.h>
 #include <vector>
+#include <cstring>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "FONT", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "FONT", __VA_ARGS__)
@@ -123,6 +124,14 @@ void FontAtlas::SetSize(float size)
 
     glyphs.clear();
     cursorX = cursorY = rowH = 0;
+
+    // Wipe stale pixel data from the GL texture
+    if (texture && atlasData) {
+        memset(atlasData, 0, atlasW * atlasH);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, atlasW, atlasH,
+                        GL_RED, GL_UNSIGNED_BYTE, atlasData);
+    }
 }
 
 const GlyphInfo* FontAtlas::GetGlyph(uint32_t codepoint)
@@ -130,6 +139,18 @@ const GlyphInfo* FontAtlas::GetGlyph(uint32_t codepoint)
     auto it = glyphs.find(codepoint);
     if (it != glyphs.end()) return &it->second;
     return RenderGlyph(codepoint);
+}
+
+float FontAtlas::GetAdvance(uint32_t codepoint)
+{
+    auto it = glyphs.find(codepoint);
+    if (it != glyphs.end()) return it->second.advanceX;
+
+    // Get advance metrics from FreeType without rendering to the atlas
+    if (FT_Load_Char(face, codepoint, FT_LOAD_NO_BITMAP)) {
+        return 0.0f;
+    }
+    return (float)face->glyph->advance.x / 64.0f;
 }
 
 GlyphInfo* FontAtlas::RenderGlyph(uint32_t codepoint)

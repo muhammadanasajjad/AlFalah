@@ -5,10 +5,12 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <unordered_set>
 #include "engine/renderer/Renderer.hpp"
 #include "engine/renderer/ClayRenderer.hpp"
 #include "engine/renderer/FontAtlas.hpp"
 #include "engine/renderer/ImageLoader.hpp"
+#include "engine/FontManager.hpp"
 #include "quran/QuranDatabase.hpp"
 #include "third_party/clay/clay.h"
 
@@ -16,8 +18,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "NATIVE", __VA_ARGS__)
 
 static ClayRenderer g_clayRenderer;
-static FontAtlas g_fontAtlas;
-static FontAtlas g_arabicFontAtlas;
+static FontManager g_fontManager;
+static uint16_t g_arabicFallbackFontId = FontManager::kInvalidFontId;
 static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
 static float g_density = 1.0f;
@@ -28,14 +30,6 @@ static Clay_Color accent = { 0, 128, 66, 255 };
 static Clay_Color accent1 = { 2, 100, 53, 255 };
 static Clay_Color fg = { 255, 255, 255, 255 };
 
-static const char* kFontPaths[] = {
-    "/system/fonts/NotoSans-Regular.ttf",
-    "/system/fonts/Roboto-Regular.ttf",
-    "/system/fonts/RobotoCondensed-Regular.ttf",
-    "/system/fonts/Roboto-Light.ttf",
-    "/system/fonts/DroidSans.ttf",
-};
-
 enum class Page { Home, Quran };
 static Page g_currentPage = Page::Home;
 
@@ -44,6 +38,7 @@ static bool g_pointerDown = false;
 static bool g_wasPointerDown = false;
 static float g_deltaTime = 0.016f;
 static QuranDatabase g_quranDb;
+static int g_surfaceVersion = 0;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
@@ -51,17 +46,13 @@ static Clay_Dimensions MeasureText(Clay_StringSlice text,
 {
     if (!config) return { 0, 0 };
 
-    FontAtlas* atlas = &g_fontAtlas;
-    hb_direction_t dir = HB_DIRECTION_LTR;
-    hb_script_t script = HB_SCRIPT_LATIN;
-    const char* lang = "en";
+    FontAtlas* atlas = g_fontManager.GetAtlas(config->fontId);
+    if (!atlas) return { 0, 0 };
 
-    if (config->fontId == 1) {
-        atlas = &g_arabicFontAtlas;
-        dir = HB_DIRECTION_RTL;
-        script = HB_SCRIPT_ARABIC;
-        lang = "ar";
-    }
+    bool isRtl = g_fontManager.IsRtl(config->fontId);
+    hb_direction_t dir = isRtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+    hb_script_t script = isRtl ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN;
+    const char* lang = isRtl ? "ar" : "en";
 
     atlas->SetSize((float)config->fontSize * g_density);
 
@@ -93,6 +84,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
         JNIEnv* env, jobject, jobject assetManager, jfloat density)
 {
     g_density = density;
+    ++g_surfaceVersion;
 
     AAssetManager* mgr = AAssetManager_fromJava(env, assetManager);
 
@@ -104,27 +96,23 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
 
     ImageLoader::Init(mgr);
 
-    // Load font from system paths
-    bool fontOk = false;
-    for (const char* fp : kFontPaths) {
-        if (g_fontAtlas.LoadFromFile(fp, (float)(16 * g_density))) {
-            fontOk = true;
-            break;
-        }
-    }
-    // Fallback: bundled font in APK assets
-    if (!fontOk && g_fontAtlas.Load(mgr, "fonts/Roboto-Regular.ttf", (float)(16 * g_density))) {
-        fontOk = true;
-    }
-    if (fontOk) {
-        g_clayRenderer.SetFontAtlas(0, &g_fontAtlas);
-        bool arabicOk = g_arabicFontAtlas.Load(mgr, "fonts/quranicFonts/qpc/p1.ttf", (float)(16 * g_density));
-        if (arabicOk) {
-            g_clayRenderer.SetFontAtlas(1, &g_arabicFontAtlas);
-            LOGI("loaded Arabic font");
-        }
+    g_fontManager.Init(mgr);
+
+    // Load system font for UI text
+    uint16_t uiFontId = g_fontManager.LoadSystem("Roboto", 16.0f * g_density, false);
+    if (uiFontId != FontManager::kInvalidFontId) {
+        g_fontManager.Register(uiFontId, g_clayRenderer);
+        LOGI("loaded UI font (fontId=%u)", uiFontId);
     } else {
         LOGE("ALL FONT LOADING FAILED — no text will render");
+    }
+
+    // Load Arabic fallback font (p1.ttf) for Quran text
+    g_arabicFallbackFontId = g_fontManager.LoadAsset(
+        "fonts/quranicFonts/qpc/p1.ttf", 16.0f * g_density, true);
+    if (g_arabicFallbackFontId != FontManager::kInvalidFontId) {
+        g_fontManager.Register(g_arabicFallbackFontId, g_clayRenderer);
+        LOGI("loaded Arabic fallback font (fontId=%u)", g_arabicFallbackFontId);
     }
 
     g_quranDb.Load(mgr);
@@ -136,8 +124,8 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
             Clay_CreateArenaWithCapacityAndMemory(g_clayArenaSize, g_clayArena),
             (Clay_Dimensions){ 0, 0 },
             (Clay_ErrorHandler){ 0 });
-        Clay_SetMeasureTextFunction(MeasureText, nullptr);
     }
+    Clay_SetMeasureTextFunction(MeasureText, nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -533,26 +521,99 @@ static void LayoutQuranPage()
     static bool sLoaded = false;
     static std::vector<std::string> ayahLines;
     static std::vector<Clay_String> ayahStrings;
+    static std::vector<uint16_t> ayahFontIds;
+    static std::vector<int32_t> pendingPages;
+    static int pendingIdx = 0;
+    static int totalAyahs = 0;
+    static int lastVersion = 0;
+
+    if (lastVersion != g_surfaceVersion) {
+        sLoaded = false;
+        ayahLines.clear();
+        ayahStrings.clear();
+        ayahFontIds.clear();
+        pendingPages.clear();
+        pendingIdx = 0;
+        totalAyahs = 0;
+        lastVersion = g_surfaceVersion;
+    }
+
     if (!sLoaded) {
-        const Surah& surah = g_quranDb.GetSurah(1);
-        ayahLines.reserve(surah.ayahs.size());
-        ayahStrings.reserve(surah.ayahs.size());
+        const Surah& surah = g_quranDb.GetSurah(36);
+        totalAyahs = (int)surah.ayahs.size();
+        ayahLines.reserve(totalAyahs);
+        ayahStrings.reserve(totalAyahs);
+
+        std::unordered_set<int32_t> uniquePages;
+        std::vector<int32_t> ayahPageNumbers;
+        ayahPageNumbers.reserve(totalAyahs);
+
         for (const auto& ayah : surah.ayahs) {
             std::string line;
+            int32_t page = 0;
             for (const auto& w : ayah.words) {
                 if (!line.empty()) line += ' ';
-                line += w.text + " ";
+                line += w.text;
+                LOGI("%s", w.text.c_str());
+                LOGI("%d", w.pageNumber);
+                if (w.pageNumber > 0) page = w.pageNumber;
             }
             ayahLines.push_back(std::move(line));
+            ayahPageNumbers.push_back(page);
+            if (page > 0) uniquePages.insert(page);
         }
+
         for (auto& s : ayahLines) {
+            LOGI("%s", s.c_str());
             ayahStrings.push_back({
                 .isStaticallyAllocated = false,
                 .length = (int)s.length(),
                 .chars = s.c_str()
             });
         }
+
+        ayahFontIds.assign(totalAyahs, FontManager::kInvalidFontId);
+        pendingPages.clear();
+
+        // Create fontIds for each unique page (lazy, not loaded yet)
+        for (int32_t page : uniquePages) {
+            char key[64];
+            snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
+            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 16.0f * g_density, true);
+            g_fontManager.Register(fid, g_clayRenderer);
+            for (int i = 0; i < totalAyahs; ++i) {
+                if (ayahPageNumbers[i] == page) {
+                    ayahFontIds[i] = fid;
+                }
+            }
+            pendingPages.push_back(page);
+        }
+
+        // Load first 3 page fonts synchronously
+        int toLoad = std::min(3, (int)pendingPages.size());
+        for (int i = 0; i < toLoad; ++i) {
+            char key[64];
+            snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[i]);
+            uint16_t fid = g_fontManager.GetFontId(key);
+            if (fid != FontManager::kInvalidFontId &&
+                g_fontManager.EnsureFontLoaded(fid)) {
+                g_fontManager.Register(fid, g_clayRenderer);
+            }
+        }
+        pendingIdx = toLoad;
+
         sLoaded = true;
+    }
+
+    // Progressively load 5 pending page fonts per frame
+    for (int i = 0; i < 5 && pendingIdx < (int)pendingPages.size(); ++i, ++pendingIdx) {
+        char key[64];
+        snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[pendingIdx]);
+        uint16_t fid = g_fontManager.GetFontId(key);
+        if (fid != FontManager::kInvalidFontId &&
+            g_fontManager.EnsureFontLoaded(fid)) {
+            g_fontManager.Register(fid, g_clayRenderer);
+        }
     }
 
     CLAY(
@@ -610,7 +671,13 @@ static void LayoutQuranPage()
                 },
             }
         ) {
-            for (int i = 0; i < (int)ayahStrings.size(); ++i) {
+            for (int i = 0; i < totalAyahs; ++i) {
+                // Use page-specific font if loaded, otherwise fall back to Arabic fallback
+                uint16_t fid = ayahFontIds[i];
+                if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
+                    fid = g_arabicFallbackFontId;
+                }
+
                 CLAY(
                     CLAY_IDI("AyahRow", (uint32_t)i),
                     {
@@ -624,8 +691,8 @@ static void LayoutQuranPage()
                         ayahStrings[i],
                         CLAY_TEXT_CONFIG({
                             .textColor = fg,
-                            .fontId = 1,
-                            .fontSize = 24,
+                            .fontId = fid,
+                            .fontSize = 28,
                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
                         })

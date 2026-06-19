@@ -1,12 +1,15 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <cstdint>
 #include <android/asset_manager.h>
 
 struct Word {
     int32_t id;
     int32_t wordNumber;
     std::string text;
+    int32_t pageNumber = 0;
 };
 
 struct Ayah {
@@ -28,8 +31,10 @@ public:
     const Ayah* GetAyah(int32_t surahNumber, int32_t ayahNumber) const;
 
 private:
+    void BuildPageMap(AAssetManager* mgr);
     void LoadSurah(AAssetManager* mgr, int32_t surahNumber);
     static std::string ReadAsset(AAssetManager* mgr, const char* path);
 
     std::vector<Surah> mSurahs;
+    std::unordered_map<int32_t, int32_t> mWordToPage;
 };

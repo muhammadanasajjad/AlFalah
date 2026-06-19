@@ -183,7 +183,8 @@ void ClayRenderer::Destroy()
     tuViewport = tuColor = tuFontAtlas = -1;
     tuClipRect = tuClipCorners = tuClipEnabled = -1;
 
-    for (auto& fa : fontAtlases) fa = nullptr;
+    fontAtlases.clear();
+    fontIsRtl.clear();
     scissorStack.clear();
 }
 
@@ -194,13 +195,18 @@ void ClayRenderer::SetResolution(int w, int h)
 
 void ClayRenderer::SetFontAtlas(FontAtlas* atlas)
 {
-    fontAtlases[0] = atlas;
+    SetFontAtlas(0, atlas, false);
 }
 
 void ClayRenderer::SetFontAtlas(uint16_t fontId, FontAtlas* atlas)
 {
-    if (fontId < kMaxFontAtlases)
-        fontAtlases[fontId] = atlas;
+    SetFontAtlas(fontId, atlas, false);
+}
+
+void ClayRenderer::SetFontAtlas(uint16_t fontId, FontAtlas* atlas, bool isRtl)
+{
+    fontAtlases[fontId] = atlas;
+    fontIsRtl[fontId] = isRtl;
 }
 
 void ClayRenderer::SetDensity(float d)
@@ -441,10 +447,15 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
 
     const Clay_TextRenderData& textData = cmd.renderData.text;
     uint16_t fid = textData.fontId;
-    if (fid >= kMaxFontAtlases || !fontAtlases[fid])
-        fid = 0;
-    FontAtlas* atlas = fontAtlases[fid];
-    if (!atlas) return;
+    auto atIt = fontAtlases.find(fid);
+    if (atIt == fontAtlases.end() || !atIt->second) {
+        atIt = fontAtlases.find(0);
+        if (atIt == fontAtlases.end() || !atIt->second) return;
+    }
+    FontAtlas* atlas = atIt->second;
+
+    auto rtlIt = fontIsRtl.find(fid);
+    bool rtl = (rtlIt != fontIsRtl.end()) ? rtlIt->second : false;
 
     Clay_StringSlice str = textData.stringContents;
     Clay_Color c = textData.textColor;
@@ -457,9 +468,6 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
     float x0 = cmd.boundingBox.x * density;
     float y0 = cmd.boundingBox.y * density;
     float baselineY = y0 + atlas->GetAscender();
-
-    // For RTL text (fontId 1 = Arabic), render in reverse visual order
-    bool rtl = (fid == 1);
 
     std::vector<uint32_t> codepoints;
     codepoints.reserve(str.length);
@@ -495,41 +503,49 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
     }
 
     if (rtl) {
+        // Pre-compute advances using GetAdvance (works even if glyph can't render in atlas)
+        std::vector<float> advances(codepoints.size());
         float totalAdvance = 0;
-        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it) {
-            const GlyphInfo* g = atlas->GetGlyph(*it);
-            if (g) totalAdvance += g->advanceX;
+        int idx = 0;
+        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it, ++idx) {
+            float adv = atlas->GetAdvance(*it);
+            advances[idx] = adv;
+            totalAdvance += adv;
         }
         float baselineX = x0 + cmd.boundingBox.width * density - totalAdvance;
 
-        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it) {
+        idx = 0;
+        for (auto it = codepoints.rbegin(); it != codepoints.rend(); ++it, ++idx) {
             const GlyphInfo* g = atlas->GetGlyph(*it);
-            if (!g) continue;
+            if (g) {
+                float gx = baselineX + g->bearingX;
+                float gy = baselineY - g->bearingY;
+                float gw = g->width;
+                float gh = g->height;
 
-            float gx = baselineX + g->bearingX;
-            float gy = baselineY - g->bearingY;
-            float gw = g->width;
-            float gh = g->height;
-
-            if (gw > 0 && gh > 0) {
-                float q[] = {
-                        gx,     gy,     g->u0, g->v0,
-                        gx+gw,  gy,     g->u1, g->v0,
-                        gx+gw,  gy+gh,  g->u1, g->v1,
-                        gx,     gy,     g->u0, g->v0,
-                        gx+gw,  gy+gh,  g->u1, g->v1,
-                        gx,     gy+gh,  g->u0, g->v1,
-                };
-                verts.insert(verts.end(), q, q + 24);
+                if (gw > 0 && gh > 0) {
+                    float q[] = {
+                            gx,     gy,     g->u0, g->v0,
+                            gx+gw,  gy,     g->u1, g->v0,
+                            gx+gw,  gy+gh,  g->u1, g->v1,
+                            gx,     gy,     g->u0, g->v0,
+                            gx+gw,  gy+gh,  g->u1, g->v1,
+                            gx,     gy+gh,  g->u0, g->v1,
+                    };
+                    verts.insert(verts.end(), q, q + 24);
+                }
             }
-            baselineX += g->advanceX;
+            baselineX += advances[idx];
         }
     } else {
         float baselineX = x0;
 
         for (uint32_t cp : codepoints) {
             const GlyphInfo* g = atlas->GetGlyph(cp);
-            if (!g) continue;
+            if (!g) {
+                baselineX += atlas->GetAdvance(cp);
+                continue;
+            }
 
             float gx = baselineX + g->bearingX;
             float gy = baselineY - g->bearingY;
@@ -570,7 +586,7 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
     glBindTexture(GL_TEXTURE_2D, atlas->GetTexture());
 
     glBindBuffer(GL_ARRAY_BUFFER, textVBO);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, verts.size() * sizeof(float), verts.data());
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
 
     glDrawArrays(GL_TRIANGLES, 0, (int)(verts.size() / 4));
 }

@@ -27,6 +27,7 @@ public:
     void SetSize(float size);
 
     const GlyphInfo* GetGlyph(uint32_t codepoint);
+    float GetAdvance(uint32_t codepoint);
     GLuint GetTexture() const { return texture; }
     hb_font_t* GetHbFont() const { return hbFont; }
     float GetScale() const { return scale; }
@@ -49,8 +50,8 @@ private:
     float lineHeight = 0;
 
     GLuint texture = 0;
-    int atlasW = 1024;
-    int atlasH = 1024;
+    int atlasW = 2048;
+    int atlasH = 2048;
     int cursorX = 0;
     int cursorY = 0;
     int rowH = 0;
