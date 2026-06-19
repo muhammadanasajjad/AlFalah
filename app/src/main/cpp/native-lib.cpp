@@ -539,7 +539,7 @@ static void LayoutQuranPage()
     }
 
     if (!sLoaded) {
-        const Surah& surah = g_quranDb.GetSurah(36);
+        const Surah& surah = g_quranDb.GetSurah(2);
         totalAyahs = (int)surah.ayahs.size();
         ayahLines.reserve(totalAyahs);
         ayahStrings.reserve(totalAyahs);
@@ -658,7 +658,7 @@ static void LayoutQuranPage()
             CLAY_ID("QuranScrollContainer"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_FIT(100), CLAY_SIZING_GROW(0) },
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
                     .padding = CLAY_PADDING_ALL(15),
                     .childGap = 16,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
@@ -678,8 +678,8 @@ static void LayoutQuranPage()
                     fid = g_arabicFallbackFontId;
                 }
 
-                CLAY(
-                    CLAY_IDI("AyahRow", (uint32_t)i),
+                CLAY_TEXT_CONTAINER(
+                    CLAY_IDI("AyahContainer", (uint32_t)i),
                     {
                         .layout = {
                             .sizing = { CLAY_SIZING_GROW(0) },
@@ -687,14 +687,22 @@ static void LayoutQuranPage()
                         }
                     }
                 ) {
-                    CLAY_TEXT(
+                    CLAY_TEXT_SPAN(
                         ayahStrings[i],
                         CLAY_TEXT_CONFIG({
                             .textColor = fg,
                             .fontId = fid,
                             .fontSize = 28,
-                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
+                        })
+                    );
+                    CLAY_TEXT_SPAN(
+                        ayahStrings[i],
+                        CLAY_TEXT_CONFIG({
+                             .textColor = accent1,
+                             .fontId = fid,
+                             .fontSize = 28,
+                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
                         })
                     );
                 }

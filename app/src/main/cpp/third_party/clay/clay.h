@@ -161,6 +161,15 @@ static inline void Clay__SuppressUnusedLatchDefinitionVariableWarning(void) { (v
 
 #define CLAY_TEXT(text, ...) Clay__OpenTextElement(text, CLAY__CONFIG_WRAPPER(Clay_TextElementConfig, __VA_ARGS__))
 
+#define CLAY_TEXT_CONTAINER(id, ...)                                                                                       \
+    for (                                                                                                                   \
+        CLAY__ELEMENT_DEFINITION_LATCH = (Clay__OpenElementWithId(id), Clay__ConfigureOpenElement(CLAY__CONFIG_WRAPPER(Clay_ElementDeclaration, __VA_ARGS__)), Clay__ConvertToTextContainer(), 0); \
+        CLAY__ELEMENT_DEFINITION_LATCH < 1;                                                                                 \
+        CLAY__ELEMENT_DEFINITION_LATCH = 1, Clay__CloseElement()                                                            \
+    )
+
+#define CLAY_TEXT_SPAN(text, ...) Clay__AddTextSpan(text, CLAY__CONFIG_WRAPPER(Clay_TextElementConfig, __VA_ARGS__))
+
 #ifdef __cplusplus
 
 #define CLAY__INIT(type) type
@@ -1039,6 +1048,8 @@ CLAY_DLL_EXPORT void Clay__CloseElement(void);
 CLAY_DLL_EXPORT Clay_ElementId Clay__HashString(Clay_String key, uint32_t seed);
 CLAY_DLL_EXPORT Clay_ElementId Clay__HashStringWithOffset(Clay_String key, uint32_t offset, uint32_t seed);
 CLAY_DLL_EXPORT void Clay__OpenTextElement(Clay_String text, Clay_TextElementConfig textConfig);
+CLAY_DLL_EXPORT void Clay__ConvertToTextContainer(void);
+CLAY_DLL_EXPORT void Clay__AddTextSpan(Clay_String text, Clay_TextElementConfig config);
 
 extern Clay_Color Clay__debugViewHighlightColor;
 extern uint32_t Clay__debugViewWidth;
@@ -1205,24 +1216,50 @@ typedef struct {
 } Clay__TextElementData;
 
 typedef struct {
+    Clay_String text;
+    Clay_TextElementConfig config;
+    float unwrappedWidth;
+    float unwrappedHeight;
+} Clay__TextSpan;
+
+CLAY__ARRAY_DEFINE(Clay__TextSpan, Clay__TextSpanArray)
+
+typedef struct {
+    int32_t spanIndex;
+    float width;
+    float height;
+    Clay_StringSlice text;
+} Clay__ContainerLineFragment;
+
+CLAY__ARRAY_DEFINE(Clay__ContainerLineFragment, Clay__ContainerLineFragmentArray)
+
+typedef struct {
+    Clay__TextSpanArraySlice spansSlice;
+    int32_t spanStartIndex;
+    Clay__ContainerLineFragmentArraySlice fragments;
+} Clay__TextContainerData;
+
+typedef struct {
     int32_t *elements;
     uint16_t length;
 } Clay__LayoutElementChildren;
 
 typedef struct Clay_LayoutElement {
     Clay__LayoutElementChildren children;
+    Clay_ElementDeclaration config;
     Clay_Dimensions dimensions;
     Clay_Dimensions minDimensions;
     union {
-        Clay_ElementDeclaration config;
         struct {
             Clay_TextElementConfig textConfig;
             Clay__TextElementData textElementData;
         };
+        Clay__TextContainerData containerData;
     };
     uint32_t id;
     uint16_t floatingChildrenCount;
     bool isTextElement;
+    bool isTextContainer;
     // True if the element is currently in an exit transition, and is "synthetic"
     // i.e. data was retained from previous frames
     bool exiting;
@@ -1359,6 +1396,8 @@ struct Clay_Context {
     // Misc Data Structures
     Clay__StringArray layoutElementIdStrings;
     Clay__WrappedTextLineArray wrappedTextLines;
+    Clay__ContainerLineFragmentArray containerLineFragments;
+    Clay__TextSpanArray textContainerSpans;
     Clay__LayoutElementTreeNodeArray layoutElementTreeNodeArray1;
     Clay__LayoutElementTreeRootArray layoutElementTreeRoots;
     Clay__LayoutElementHashMapItemArray layoutElementsHashMapInternal;
@@ -2109,6 +2148,23 @@ void Clay__OpenTextElement(Clay_String text, Clay_TextElementConfig textConfig) 
     parentElement->children.length++;
 }
 
+void Clay__ConvertToTextContainer(void) {
+    Clay_Context* context = Clay_GetCurrentContext();
+    Clay_LayoutElement *openLayoutElement = Clay__GetOpenLayoutElement();
+    openLayoutElement->isTextContainer = true;
+    openLayoutElement->containerData.spanStartIndex = context->textContainerSpans.length;
+    openLayoutElement->containerData.spansSlice = CLAY__INIT(Clay__TextSpanArraySlice) { .length = 0, .internalArray = &context->textContainerSpans.internalArray[openLayoutElement->containerData.spanStartIndex] };
+    openLayoutElement->containerData.fragments = CLAY__DEFAULT_STRUCT;
+}
+
+void Clay__AddTextSpan(Clay_String text, Clay_TextElementConfig config) {
+    Clay_Context* context = Clay_GetCurrentContext();
+    Clay_LayoutElement *container = Clay__GetOpenLayoutElement();
+    if (!container->isTextContainer) return;
+    Clay__TextSpan span = { .text = text, .config = config, .unwrappedWidth = 0, .unwrappedHeight = 0 };
+    Clay__TextSpanArray_Add(&context->textContainerSpans, span);
+}
+
 void Clay__ConfigureOpenElementPtr(const Clay_ElementDeclaration *declaration) {
     Clay_Context* context = Clay_GetCurrentContext();
     Clay_LayoutElement *openLayoutElement = Clay__GetOpenLayoutElement();
@@ -2229,6 +2285,8 @@ void Clay__InitializeEphemeralMemory(Clay_Context* context) {
 
     context->layoutElementIdStrings = Clay__StringArray_Allocate_Arena(maxElementCount, arena);
     context->wrappedTextLines = Clay__WrappedTextLineArray_Allocate_Arena(maxElementCount, arena);
+    context->containerLineFragments = Clay__ContainerLineFragmentArray_Allocate_Arena(maxElementCount, arena);
+    context->textContainerSpans = Clay__TextSpanArray_Allocate_Arena(maxElementCount, arena);
     context->layoutElementTreeNodeArray1 = Clay__LayoutElementTreeNodeArray_Allocate_Arena(maxElementCount, arena);
     context->layoutElementTreeRoots = Clay__LayoutElementTreeRootArray_Allocate_Arena(maxElementCount, arena);
     context->layoutElementChildren = Clay__int32_tArray_Allocate_Arena(maxElementCount, arena);
@@ -2635,6 +2693,201 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
         containerElement->dimensions.height = lineHeight * (float)textElementData->wrappedLines.length;
     }
 
+    // Wrap text containers (rich text with inline spans)
+    // First pass: collect container indices to compute per-container spansSlice.length
+    int32_t containerCount = 0;
+    for (int32_t elemIdx = 0; elemIdx < context->layoutElements.length; ++elemIdx) {
+        Clay_LayoutElement *elem = Clay_LayoutElementArray_Get(&context->layoutElements, elemIdx);
+        if (!elem->isTextContainer) continue;
+        containerCount++;
+    }
+    if (containerCount > 0) {
+        // Collect container start indices in the global spans array
+        // We reuse openClipElementStack as temporary storage (it's reset before wrapping)
+        int32_t *containerStartIndices = (int32_t *)context->openClipElementStack.internalArray;
+        int32_t *containerElemIndices = (int32_t *)&containerStartIndices[containerCount];
+        int32_t ci = 0;
+        for (int32_t elemIdx = 0; elemIdx < context->layoutElements.length; ++elemIdx) {
+            Clay_LayoutElement *elem = Clay_LayoutElementArray_Get(&context->layoutElements, elemIdx);
+            if (!elem->isTextContainer) continue;
+            containerElemIndices[ci] = elemIdx;
+            containerStartIndices[ci] = elem->containerData.spanStartIndex;
+            ci++;
+        }
+        // Compute spansSlice.length for each container
+        for (int32_t i = 0; i < containerCount; ++i) {
+            Clay_LayoutElement *elem = Clay_LayoutElementArray_Get(&context->layoutElements, containerElemIndices[i]);
+            int32_t nextStart = (i + 1 < containerCount) ? containerStartIndices[i + 1] : context->textContainerSpans.length;
+            int32_t spanCount = nextStart - containerStartIndices[i];
+            elem->containerData.spansSlice.length = spanCount;
+            if (spanCount == 0) continue;
+
+            // Record start of fragments for this container in the global array
+            elem->containerData.fragments = CLAY__INIT(Clay__ContainerLineFragmentArraySlice) {
+                .length = 0,
+                .internalArray = &context->containerLineFragments.internalArray[context->containerLineFragments.length]
+            };
+
+            float containerWidth = elem->dimensions.width;
+
+            // Per-line state
+            float lineWidth = 0;
+            float lineHeight = 0;
+            bool lineHasContent = false;
+            float totalHeight = 0;
+
+            // Current span fragment being accumulated on this line
+            int32_t curSpanIdx = -1;
+            int32_t curSpanStartChar = 0;
+            int32_t curSpanCharLen = 0;
+            float curSpanWidth = 0;
+
+            float spaceWidth = 0;
+
+            for (int32_t spanIdx = 0; spanIdx < spanCount; ++spanIdx) {
+                Clay__TextSpan *span = &context->textContainerSpans.internalArray[containerStartIndices[i] + spanIdx];
+                Clay__MeasureTextCacheItem *cache = Clay__MeasureTextCached(&span->text, &span->config);
+                float naturalHeight = cache->unwrappedDimensions.height;
+                span->unwrappedWidth = cache->unwrappedDimensions.width;
+                span->unwrappedHeight = naturalHeight;
+                float spanLineHeight = span->config.lineHeight > 0 ? (float)span->config.lineHeight : naturalHeight;
+
+                if (spaceWidth == 0) {
+                    spaceWidth = Clay__MeasureText(CLAY__INIT(Clay_StringSlice) { .length = 1, .chars = CLAY__SPACECHAR.chars, .baseChars = CLAY__SPACECHAR.chars }, &span->config, context->measureTextUserData).width;
+                }
+
+                int32_t wordIndex = cache->measuredWordsStartIndex;
+                while (wordIndex != -1) {
+                    Clay__MeasuredWord *word = Clay__MeasuredWordArray_Get(&context->measuredWords, wordIndex);
+
+                    if (context->containerLineFragments.length >= context->containerLineFragments.capacity - 1) {
+                        break;
+                    }
+
+                    // Handle span switch: emit accumulated fragment from previous span
+                    if (curSpanIdx != -1 && curSpanIdx != spanIdx && curSpanWidth > 0) {
+                        if (curSpanCharLen > 0) {
+                            Clay__TextSpan *prevSpan = &context->textContainerSpans.internalArray[containerStartIndices[i] + curSpanIdx];
+                            Clay__ContainerLineFragment frag = {
+                                .spanIndex = curSpanIdx,
+                                .width = curSpanWidth,
+                                .height = lineHeight,
+                                .text = { .length = curSpanCharLen, .chars = prevSpan->text.chars + curSpanStartChar, .baseChars = prevSpan->text.chars }
+                            };
+                            Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, frag);
+                        }
+                        curSpanWidth = 0;
+                        curSpanCharLen = 0;
+                    }
+
+                    // Newline: finalize current line
+                    bool isNewline = (word->length == 0);
+                    if (isNewline) {
+                        float nlHeight = lineHasContent ? lineHeight : spanLineHeight;
+                        // Emit current span fragment if any
+                        if (curSpanIdx >= 0 && curSpanWidth > 0) {
+                            if (curSpanCharLen > 0) {
+                                Clay__TextSpan *prevSpan = &context->textContainerSpans.internalArray[containerStartIndices[i] + curSpanIdx];
+                                Clay__ContainerLineFragment frag = {
+                                    .spanIndex = curSpanIdx,
+                                    .width = curSpanWidth,
+                                    .height = nlHeight,
+                                    .text = { .length = curSpanCharLen, .chars = prevSpan->text.chars + curSpanStartChar, .baseChars = prevSpan->text.chars }
+                                };
+                                Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, frag);
+                            }
+                            curSpanWidth = 0;
+                            curSpanCharLen = 0;
+                        }
+                        // Emit line-break sentinel
+                        totalHeight += nlHeight;
+                        Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, CLAY__INIT(Clay__ContainerLineFragment) { .spanIndex = -1, .width = 0, .height = nlHeight });
+
+                        // Reset line state
+                        lineWidth = 0;
+                        lineHeight = 0;
+                        lineHasContent = false;
+                        curSpanIdx = -1;
+                        curSpanWidth = 0;
+                        curSpanCharLen = 0;
+                        wordIndex = word->next;
+                        continue;
+                    }
+
+                    // Line overflow: finalize current line
+                    if (lineHasContent && lineWidth + word->width > containerWidth) {
+                        // Emit current span fragment if any
+                        if (curSpanIdx >= 0 && curSpanWidth > 0) {
+                            if (curSpanCharLen > 0) {
+                                Clay__TextSpan *prevSpan = &context->textContainerSpans.internalArray[containerStartIndices[i] + curSpanIdx];
+                                Clay__ContainerLineFragment frag = {
+                                    .spanIndex = curSpanIdx,
+                                    .width = curSpanWidth,
+                                    .height = lineHeight,
+                                    .text = { .length = curSpanCharLen, .chars = prevSpan->text.chars + curSpanStartChar, .baseChars = prevSpan->text.chars }
+                                };
+                                Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, frag);
+                            }
+                            curSpanWidth = 0;
+                            curSpanCharLen = 0;
+                        }
+                        // Emit line-break sentinel
+                        totalHeight += lineHeight;
+                        Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, CLAY__INIT(Clay__ContainerLineFragment) { .spanIndex = -1, .width = 0, .height = lineHeight });
+
+                        // Reset line state - overflow word goes on next line
+                        lineWidth = 0;
+                        lineHeight = 0;
+                        lineHasContent = false;
+                        curSpanIdx = -1;
+                        curSpanWidth = 0;
+                        curSpanCharLen = 0;
+                    }
+
+                    // Start tracking a new span fragment if needed
+                    if (curSpanIdx != spanIdx) {
+                        curSpanIdx = spanIdx;
+                        curSpanStartChar = word->startOffset;
+                        curSpanWidth = 0;
+                        curSpanCharLen = 0;
+                    }
+
+                    // Accumulate this word
+                    lineWidth += word->width + ((lineHasContent && word->length > 0) ? span->config.letterSpacing : 0);
+                    curSpanWidth += word->width;
+                    curSpanCharLen += word->length;
+                    lineHeight = CLAY__MAX(lineHeight, spanLineHeight);
+                    lineHasContent = true;
+
+                    wordIndex = word->next;
+                }
+            }
+
+            // Emit final fragment if any
+            if (curSpanIdx >= 0 && curSpanWidth > 0) {
+                if (curSpanCharLen > 0) {
+                    Clay__TextSpan *lastSpan = &context->textContainerSpans.internalArray[containerStartIndices[i] + curSpanIdx];
+                    Clay__ContainerLineFragment frag = {
+                        .spanIndex = curSpanIdx,
+                        .width = curSpanWidth,
+                        .height = lineHeight,
+                        .text = { .length = curSpanCharLen, .chars = lastSpan->text.chars + curSpanStartChar, .baseChars = lastSpan->text.chars }
+                    };
+                    Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, frag);
+                }
+            }
+            // Emit final line-break sentinel
+            totalHeight += lineHeight;
+            Clay__ContainerLineFragmentArray_Add(&context->containerLineFragments, CLAY__INIT(Clay__ContainerLineFragment) { .spanIndex = -1, .width = 0, .height = lineHeight });
+
+            // Set container height based on wrapped lines
+            elem->dimensions.height = totalHeight;
+
+            // Compute fragment count for this container
+            elem->containerData.fragments.length = context->containerLineFragments.length - (int32_t)(elem->containerData.fragments.internalArray - context->containerLineFragments.internalArray);
+        }
+    }
+
     // Scale vertical heights according to aspect ratio
     for (int32_t i = 0; i < aspectRatioElements.length; ++i) {
         Clay_LayoutElement* aspectElement = Clay_LayoutElementArray_Get(&context->layoutElements, Clay__int32_tArray_GetValue(&aspectRatioElements, i));
@@ -2656,7 +2909,7 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
         if (!context->treeNodeVisited.internalArray[dfsBuffer.length - 1]) {
             context->treeNodeVisited.internalArray[dfsBuffer.length - 1] = true;
             // If the element has no children or is the container for a text element, don't bother inspecting it
-            if (currentElement->isTextElement || currentElement->children.length == 0) {
+            if (currentElement->isTextElement || currentElement->isTextContainer || currentElement->children.length == 0) {
                 dfsBuffer.length--;
                 continue;
             }
@@ -2812,7 +3065,7 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
 
             // DFS is returning back upwards
             if (context->treeNodeVisited.internalArray[dfsBuffer.length - 1]) {
-                if (currentElement->isTextElement) {
+                if (currentElement->isTextElement || currentElement->isTextContainer) {
                     dfsBuffer.length--;
                     continue;
                 }
@@ -3007,6 +3260,95 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
                             break;
                         }
                     }
+                } else if (currentElement->isTextContainer) {
+                    float yPosition = 0;
+                    int32_t fragIdx = 0;
+                    Clay__ContainerLineFragmentArraySlice *fragments = &currentElement->containerData.fragments;
+                    while (fragIdx < fragments->length) {
+                        Clay__ContainerLineFragment *first = Clay__ContainerLineFragmentArraySlice_Get(fragments, fragIdx);
+                        // Skip sentinels with no preceding content (e.g. initial empty line)
+                        if (first->spanIndex == -1) {
+                            yPosition += first->height;
+                            fragIdx++;
+                            continue;
+                        }
+                        // Measure total width of this line and pick alignment from first span
+                        float lineWidth = 0;
+                        Clay_TextAlignment lineAlign = CLAY_TEXT_ALIGN_LEFT;
+                        int32_t lineStart = fragIdx;
+                        while (fragIdx < fragments->length) {
+                            Clay__ContainerLineFragment *lf = Clay__ContainerLineFragmentArraySlice_Get(fragments, fragIdx);
+                            if (lf->spanIndex == -1) break;
+                            if (fragIdx == lineStart) {
+                                lineAlign = context->textContainerSpans.internalArray[currentElement->containerData.spanStartIndex + lf->spanIndex].config.textAlignment;
+                            }
+                            lineWidth += lf->width;
+                            fragIdx++;
+                        }
+                        float offset = currentElementBoundingBox.width - lineWidth;
+                        if (lineAlign == CLAY_TEXT_ALIGN_LEFT) offset = 0;
+                        if (lineAlign == CLAY_TEXT_ALIGN_CENTER) offset /= 2;
+                        if (lineAlign == CLAY_TEXT_ALIGN_RIGHT) {
+                            // RTL: render fragments in order, positioned from right edge inward
+                            int32_t rtlIdx = lineStart;
+                            float xPosition = currentElementBoundingBox.x + currentElementBoundingBox.width;
+                            while (rtlIdx < fragIdx) {
+                                Clay__ContainerLineFragment *frag = Clay__ContainerLineFragmentArraySlice_Get(fragments, rtlIdx);
+                                Clay__TextSpan *span = &context->textContainerSpans.internalArray[currentElement->containerData.spanStartIndex + frag->spanIndex];
+                                xPosition -= frag->width;
+                                Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
+                                    .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
+                                    .renderData = { .text = {
+                                        .stringContents = frag->text,
+                                        .textColor = span->config.textColor,
+                                        .fontId = span->config.fontId,
+                                        .fontSize = span->config.fontSize,
+                                        .letterSpacing = span->config.letterSpacing,
+                                        .lineHeight = span->config.lineHeight,
+                                    }},
+                                    .userData = span->config.userData,
+                                    .id = Clay__HashNumber(rtlIdx, currentElement->id).id,
+                                    .zIndex = root->zIndex,
+                                    .commandType = CLAY_RENDER_COMMAND_TYPE_TEXT,
+                                });
+                                rtlIdx++;
+                            }
+                        } else {
+                            // LTR: render fragments left to right
+                            int32_t ltrIdx = lineStart;
+                            float xPosition = currentElementBoundingBox.x + offset;
+                            while (ltrIdx < fragIdx) {
+                                Clay__ContainerLineFragment *frag = Clay__ContainerLineFragmentArraySlice_Get(fragments, ltrIdx);
+                                Clay__TextSpan *span = &context->textContainerSpans.internalArray[currentElement->containerData.spanStartIndex + frag->spanIndex];
+                                Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
+                                    .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
+                                    .renderData = { .text = {
+                                        .stringContents = frag->text,
+                                        .textColor = span->config.textColor,
+                                        .fontId = span->config.fontId,
+                                        .fontSize = span->config.fontSize,
+                                        .letterSpacing = span->config.letterSpacing,
+                                        .lineHeight = span->config.lineHeight,
+                                    }},
+                                    .userData = span->config.userData,
+                                    .id = Clay__HashNumber(ltrIdx, currentElement->id).id,
+                                    .zIndex = root->zIndex,
+                                    .commandType = CLAY_RENDER_COMMAND_TYPE_TEXT,
+                                });
+                                xPosition += frag->width;
+                                ltrIdx++;
+                            }
+                        }
+                        // Consume the line-break sentinel and advance Y
+                        if (fragIdx < fragments->length) {
+                            Clay__ContainerLineFragment *sentinel = Clay__ContainerLineFragmentArraySlice_Get(fragments, fragIdx);
+                            yPosition += sentinel->height;
+                            fragIdx++;
+                        }
+                        if (!context->disableCulling && (currentElementBoundingBox.y + yPosition > context->layoutDimensions.height)) {
+                            break;
+                        }
+                    }
                 } else {
                     if (currentElement->config.overlayColor.a > 0) {
                         Clay_RenderCommand renderCommand = {
@@ -3090,7 +3432,7 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
             Clay_LayoutElementHashMapItem *hashMapItem = Clay__GetHashMapItem(currentElement->id);
             hashMapItem->boundingBox = currentElementBoundingBox;
 
-            if (currentElement->isTextElement) continue;
+            if (currentElement->isTextElement || currentElement->isTextContainer) continue;
 
             // Setup positions for child elements and add to DFS buffer ----------
 
