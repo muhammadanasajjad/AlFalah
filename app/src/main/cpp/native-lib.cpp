@@ -671,22 +671,22 @@ static void LayoutQuranPage()
                 },
             }
         ) {
-            for (int i = 0; i < totalAyahs; ++i) {
-                // Use page-specific font if loaded, otherwise fall back to Arabic fallback
-                uint16_t fid = ayahFontIds[i];
-                if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
-                    fid = g_arabicFallbackFontId;
-                }
-
-                CLAY_TEXT_CONTAINER(
-                    CLAY_IDI("AyahContainer", (uint32_t)i),
-                    {
-                        .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0) },
-                            .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
-                        }
+            CLAY_TEXT_CONTAINER(
+                CLAY_ID("AyahContainer"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
                     }
-                ) {
+                }
+            ) {
+                for (int i = 0; i < totalAyahs; ++i) {
+                    // Use page-specific font if loaded, otherwise fall back to Arabic fallback
+                    uint16_t fid = ayahFontIds[i];
+                    if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
+                        fid = g_arabicFallbackFontId;
+                    }
+
                     CLAY_TEXT_SPAN(
                         ayahStrings[i],
                         CLAY_TEXT_CONFIG({
@@ -694,15 +694,6 @@ static void LayoutQuranPage()
                             .fontId = fid,
                             .fontSize = 28,
                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
-                        })
-                    );
-                    CLAY_TEXT_SPAN(
-                        ayahStrings[i],
-                        CLAY_TEXT_CONFIG({
-                             .textColor = accent1,
-                             .fontId = fid,
-                             .fontSize = 28,
-                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
                         })
                     );
                 }
