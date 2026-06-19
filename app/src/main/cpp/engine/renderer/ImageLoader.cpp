@@ -13,6 +13,7 @@ std::unordered_map<GLuint, std::pair<int, int>> ImageLoader::sTexToDims;
 
 void ImageLoader::Init(AAssetManager* mgr)
 {
+    Destroy();
     sMgr = mgr;
 }
 
