@@ -29,6 +29,7 @@ static Clay_Color bg1 = { 31, 31, 22, 255 };
 static Clay_Color accent = { 0, 128, 66, 255 };
 static Clay_Color accent1 = { 2, 100, 53, 255 };
 static Clay_Color fg = { 255, 255, 255, 255 };
+static Clay_Color fg1 = { 148, 166, 177, 255 };
 
 enum class Page { Home, Quran, SurahSelection };
 static Page g_currentPage = Page::Home;
@@ -527,10 +528,12 @@ static void LayoutHomePage()
 
 static void LayoutSurahSelectionPage()
 {
-    static std::vector<std::string> rowLabels;
-    static std::vector<std::string> pageTexts;
-    static std::vector<Clay_String> rowLabelStrings;
-    static std::vector<Clay_String> pageTextStrings;
+    static std::vector<std::string> surahNames;
+    static std::vector<Clay_String> surahNamesStrings;
+    static std::vector<std::string> surahNumbers;
+    static std::vector<Clay_String> surahNumbersStrings;
+    static std::vector<std::string> surahDetails;
+    static std::vector<Clay_String> surahDetailsStrings;
     static bool sBuilt = false;
     static int sLastVersion = 0;
 
@@ -540,27 +543,32 @@ static void LayoutSurahSelectionPage()
     }
 
     if (!sBuilt) {
-        rowLabels.resize(114);
-        pageTexts.resize(114);
-        rowLabelStrings.resize(114);
-        pageTextStrings.resize(114);
+        surahNames.resize(114);
+        surahNamesStrings.resize(114);
+        surahNumbers.resize(114);
+        surahNumbersStrings.resize(114);
+        surahDetails.resize(114);
+        surahDetailsStrings.resize(114);
         for (int i = 0; i < 114; ++i) {
             const SurahInfo& info = g_quranDb.GetSurahInfo(i + 1);
-            rowLabels[i] = std::to_string(i + 1) + ". " + info.nameSimple;
-            if (info.startPage == info.endPage) {
-                pageTexts[i] = "Pg " + std::to_string(info.startPage);
-            } else {
-                pageTexts[i] = "Pg " + std::to_string(info.startPage) + "-" + std::to_string(info.endPage);
-            }
-            rowLabelStrings[i] = {
+            surahNames[i] = info.nameSimple;
+            surahNumbers[i] = std::to_string(i + 1);
+            surahDetails[i] = info.revelationPlace == "makkah" ? "Makki" : "Madani";
+            surahDetails[i] += " • " + std::to_string(info.verseCount) + " Verses";
+            surahNamesStrings[i] = {
                 .isStaticallyAllocated = false,
-                .length = (int)rowLabels[i].length(),
-                .chars = rowLabels[i].c_str()
+                .length = (int)surahNames[i].length(),
+                .chars = surahNames[i].c_str()
             };
-            pageTextStrings[i] = {
+            surahNumbersStrings[i] = {
                 .isStaticallyAllocated = false,
-                .length = (int)pageTexts[i].length(),
-                .chars = pageTexts[i].c_str()
+                .length = (int)surahNumbers[i].length(),
+                .chars = surahNumbers[i].c_str()
+            };
+            surahDetailsStrings[i] = {
+                .isStaticallyAllocated = false,
+                .length = (int)surahDetails[i].length(),
+                .chars = surahDetails[i].c_str()
             };
         }
         sBuilt = true;
@@ -632,9 +640,9 @@ static void LayoutSurahSelectionPage()
             CLAY_ID("SurahListScroll"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(1) },
                     .padding = CLAY_PADDING_ALL(8),
-                    .childGap = 2,
+                    .childGap = 8,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
                 .backgroundColor = bg1,
@@ -645,7 +653,7 @@ static void LayoutSurahSelectionPage()
                 },
             }
         ) {
-            for (int i = 0; i < 114; ++i) {
+            for (int i = 0; i < 20; ++i) {
                 const SurahInfo& info = g_quranDb.GetSurahInfo(i + 1);
                 Clay_String arabicStr = {
                     .isStaticallyAllocated = false,
@@ -659,22 +667,63 @@ static void LayoutSurahSelectionPage()
                         .layout = {
                             .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(52) },
                             .padding = { .left = 12, .right = 8 },
-                            .childGap = 8,
-                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                            .childGap = 12,
+                            .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT
                         },
                         .backgroundColor = rowBg,
                         .cornerRadius = {10, 10, 10, 10},
                     }
                 ) {
-                    CLAY_TEXT(
-                        rowLabelStrings[i],
-                        CLAY_TEXT_CONFIG({
-                            .textColor = fg,
-                            .fontId = 0,
-                            .fontSize = 15,
-                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                        })
-                    );
+                    CLAY(
+                        CLAY_IDI("SurahNumber", i),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_FIXED(42), CLAY_SIZING_FIXED(42) },
+                                .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER }
+                            },
+                            .image = {
+                                .imageData = ImageLoader::Get("images/starNew.png")
+                            }
+                        }
+                    ) {
+                        CLAY_TEXT(
+                            surahNumbersStrings[i],
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = fg,
+                                 .fontId = 0,
+                                 .fontSize = 15,
+                                 .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            })
+                        );
+                    }
+                    CLAY(
+                        CLAY_IDI("SurahEnglishSide", i),
+                        {
+                            .layout = {
+                                .childGap = 6,
+                                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                            },
+                    }) {
+                        CLAY_TEXT(
+                            surahNamesStrings[i],
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = fg,
+                                 .fontId = 0,
+                                 .fontSize = 18,
+                                 .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            })
+                        );
+                        CLAY_TEXT(
+                            surahDetailsStrings[i],
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = fg1,
+                                 .fontId = 0,
+                                 .fontSize = 12,
+                                 .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                            })
+                        );
+                    }
                 }
             }
         }
