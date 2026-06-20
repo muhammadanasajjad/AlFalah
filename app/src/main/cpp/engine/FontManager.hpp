@@ -18,7 +18,7 @@ public:
     uint16_t LoadAsset(const char* key, float size, bool rtl = false);
     uint16_t GetOrCreateFontId(const char* key, float size, bool rtl = false);
 
-    uint16_t GetFontId(const char* key) const;
+    uint16_t GetFontId(const char* key, float size) const;
     FontAtlas* GetAtlas(uint16_t fontId);
     bool IsRtl(uint16_t fontId) const;
     bool EnsureFontLoaded(uint16_t fontId);
@@ -30,13 +30,16 @@ public:
 
 private:
     struct FontEntry {
-        std::string key;
+        std::string compositeKey;
+        std::string path;
         FontAtlas* atlas = nullptr;
         bool isRtl = false;
         float size = 16.0f;
     };
 
-    uint16_t AddEntry(const std::string& key, float size, bool rtl, FontAtlas* atlas);
+    static std::string MakeCompositeKey(const char* key, float size);
+    uint16_t AddEntry(const std::string& compositeKey, const std::string& path,
+                      float size, bool rtl, FontAtlas* atlas);
 
     AAssetManager* mMgr = nullptr;
     std::vector<FontEntry> mFonts;

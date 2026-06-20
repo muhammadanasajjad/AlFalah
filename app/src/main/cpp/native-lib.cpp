@@ -20,6 +20,11 @@
 static ClayRenderer g_clayRenderer;
 static FontManager g_fontManager;
 static uint16_t g_arabicFallbackFontId = FontManager::kInvalidFontId;
+static uint16_t g_roboto12 = FontManager::kInvalidFontId;
+static uint16_t g_roboto15 = FontManager::kInvalidFontId;
+static uint16_t g_roboto18 = FontManager::kInvalidFontId;
+static uint16_t g_roboto22 = FontManager::kInvalidFontId;
+static uint16_t g_roboto24 = FontManager::kInvalidFontId;
 static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
 static float g_density = 1.0f;
@@ -103,18 +108,23 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
 
     g_fontManager.Init(mgr);
 
-    // Load system font for UI text
-    uint16_t uiFontId = g_fontManager.LoadSystem("Roboto", 16.0f * g_density, false);
-    if (uiFontId != FontManager::kInvalidFontId) {
-        g_fontManager.Register(uiFontId, g_clayRenderer);
-        LOGI("loaded UI font (fontId=%u)", uiFontId);
-    } else {
-        LOGE("ALL FONT LOADING FAILED — no text will render");
+    {
+        float dpSizes[] = {12, 15, 16, 18, 22, 24};
+        for (float dp : dpSizes) {
+            uint16_t fid = g_fontManager.LoadSystem("Roboto", dp * g_density, false);
+            if (fid != FontManager::kInvalidFontId)
+                g_fontManager.Register(fid, g_clayRenderer);
+        }
+        g_roboto12 = g_fontManager.GetFontId("Roboto", 12 * g_density);
+        g_roboto15 = g_fontManager.GetFontId("Roboto", 15 * g_density);
+        g_roboto18 = g_fontManager.GetFontId("Roboto", 18 * g_density);
+        g_roboto22 = g_fontManager.GetFontId("Roboto", 22 * g_density);
+        g_roboto24 = g_fontManager.GetFontId("Roboto", 24 * g_density);
     }
 
-    // Load Arabic fallback font (p1.ttf) for Quran text
+    // Load Arabic fallback font (p1.ttf) for Quran text at render size (28dp)
     g_arabicFallbackFontId = g_fontManager.LoadAsset(
-        "fonts/quranicFonts/qpc/p1.ttf", 16.0f * g_density, true);
+        "fonts/quranicFonts/qpc/p1.ttf", 28.0f * g_density, true);
     if (g_arabicFallbackFontId != FontManager::kInvalidFontId) {
         g_fontManager.Register(g_arabicFallbackFontId, g_clayRenderer);
         LOGI("loaded Arabic fallback font (fontId=%u)", g_arabicFallbackFontId);
@@ -215,11 +225,11 @@ static void LayoutHomePage()
                     }
                 ) {
                     CLAY_TEXT(
-                        CLAY_STRING("Qur'an"),
-                        CLAY_TEXT_CONFIG({
-                             .textColor = fg,
-                             .fontId = 0,
-                             .fontSize = 24,
+                         CLAY_STRING("Qur'an"),
+                         CLAY_TEXT_CONFIG({
+                              .textColor = fg,
+                              .fontId = g_roboto24,
+                              .fontSize = 24,
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
                         })
                     );
@@ -228,7 +238,7 @@ static void LayoutHomePage()
                         CLAY_STRING("Read and explore\nthe Qur'an"),
                         CLAY_TEXT_CONFIG({
                              .textColor = fg,
-                             .fontId = 0,
+                             .fontId = g_roboto12,
                              .fontSize = 12,
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
                         })
@@ -296,11 +306,11 @@ static void LayoutHomePage()
                         }
                     ) {
                         CLAY_TEXT(
-                            CLAY_STRING("Tasbih"),
-                            CLAY_TEXT_CONFIG({
-                                 .textColor = fg,
-                                 .fontId = 0,
-                                 .fontSize = 24,
+                         CLAY_STRING("Tasbih"),
+                             CLAY_TEXT_CONFIG({
+                                  .textColor = fg,
+                                  .fontId = g_roboto24,
+                                  .fontSize = 24,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
                              })
                         );
@@ -355,11 +365,11 @@ static void LayoutHomePage()
                         }
                     ) {
                         CLAY_TEXT(
-                            CLAY_STRING("Albums"),
-                            CLAY_TEXT_CONFIG({
-                                 .textColor = fg,
-                                 .fontId = 0,
-                                 .fontSize = 24,
+                         CLAY_STRING("Albums"),
+                             CLAY_TEXT_CONFIG({
+                                  .textColor = fg,
+                                  .fontId = g_roboto24,
+                                  .fontSize = 24,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
                              })
                         );
@@ -426,11 +436,11 @@ static void LayoutHomePage()
                     }
                 ) {
                     CLAY_TEXT(
-                        CLAY_STRING("Times"),
-                        CLAY_TEXT_CONFIG({
-                             .textColor = fg,
-                             .fontId = 0,
-                             .fontSize = 24,
+                         CLAY_STRING("Times"),
+                         CLAY_TEXT_CONFIG({
+                              .textColor = fg,
+                              .fontId = g_roboto24,
+                              .fontSize = 24,
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
                          })
                     );
@@ -485,11 +495,11 @@ static void LayoutHomePage()
                     }
                 ) {
                     CLAY_TEXT(
-                        CLAY_STRING("Stats"),
-                        CLAY_TEXT_CONFIG({
-                             .textColor = fg,
-                             .fontId = 0,
-                             .fontSize = 24,
+                         CLAY_STRING("Stats"),
+                         CLAY_TEXT_CONFIG({
+                              .textColor = fg,
+                              .fontId = g_roboto24,
+                              .fontSize = 24,
                              .wrapMode = CLAY_TEXT_WRAP_WORDS,
                          })
                     );
@@ -614,12 +624,12 @@ static void LayoutSurahSelectionPage()
                     .cornerRadius = {12, 12, 12, 12},
                 }
             ) {
-                CLAY_TEXT(
-                    CLAY_STRING("<- Back"),
-                    CLAY_TEXT_CONFIG({
-                        .textColor = fg,
-                        .fontId = 0,
-                        .fontSize = 18,
+                    CLAY_TEXT(
+                        CLAY_STRING("<- Back"),
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = g_roboto18,
+                            .fontSize = 18,
                         .wrapMode = CLAY_TEXT_WRAP_WORDS,
                     })
                 );
@@ -629,7 +639,7 @@ static void LayoutSurahSelectionPage()
                 CLAY_STRING("Select Surah"),
                 CLAY_TEXT_CONFIG({
                     .textColor = fg,
-                    .fontId = 0,
+                    .fontId = g_roboto22,
                     .fontSize = 22,
                     .wrapMode = CLAY_TEXT_WRAP_WORDS,
                 })
@@ -645,15 +655,13 @@ static void LayoutSurahSelectionPage()
                     .childGap = 8,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
-                .backgroundColor = bg1,
-                .cornerRadius = {24, 24, 24, 24},
                 .clip = {
                     .vertical = true,
                     .childOffset = Clay_GetScrollOffset()
                 },
             }
         ) {
-            for (int i = 0; i < 20; ++i) {
+            for (int i = 0; i < 114; ++i) {
                 const SurahInfo& info = g_quranDb.GetSurahInfo(i + 1);
                 Clay_String arabicStr = {
                     .isStaticallyAllocated = false,
@@ -671,7 +679,6 @@ static void LayoutSurahSelectionPage()
                             .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
                             .layoutDirection = CLAY_LEFT_TO_RIGHT
                         },
-                        .backgroundColor = rowBg,
                         .cornerRadius = {10, 10, 10, 10},
                     }
                 ) {
@@ -679,8 +686,9 @@ static void LayoutSurahSelectionPage()
                         CLAY_IDI("SurahNumber", i),
                         {
                             .layout = {
-                                .sizing = { CLAY_SIZING_FIXED(42), CLAY_SIZING_FIXED(42) },
-                                .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER }
+                                .sizing = {CLAY_SIZING_FIXED(42),
+                                           CLAY_SIZING_FIXED(42)},
+                                .childAlignment = {.x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER}
                             },
                             .image = {
                                 .imageData = ImageLoader::Get("images/starNew.png")
@@ -691,7 +699,7 @@ static void LayoutSurahSelectionPage()
                             surahNumbersStrings[i],
                             CLAY_TEXT_CONFIG({
                                  .textColor = fg,
-                                 .fontId = 0,
+                                 .fontId = g_roboto15,
                                  .fontSize = 15,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
                             })
@@ -704,12 +712,12 @@ static void LayoutSurahSelectionPage()
                                 .childGap = 6,
                                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
                             },
-                    }) {
+                        }) {
                         CLAY_TEXT(
                             surahNamesStrings[i],
                             CLAY_TEXT_CONFIG({
                                  .textColor = fg,
-                                 .fontId = 0,
+                                 .fontId = g_roboto18,
                                  .fontSize = 18,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
                             })
@@ -718,12 +726,29 @@ static void LayoutSurahSelectionPage()
                             surahDetailsStrings[i],
                             CLAY_TEXT_CONFIG({
                                  .textColor = fg1,
-                                 .fontId = 0,
+                                 .fontId = g_roboto12,
                                  .fontSize = 12,
                                  .wrapMode = CLAY_TEXT_WRAP_WORDS,
                             })
                         );
                     }
+                    CLAY(
+                        CLAY_ID("SurahRowSpacer"),
+                        {
+                            .layout = {
+                                .sizing = { .width = CLAY_SIZING_GROW() }
+                            }
+                    }) {}
+                    // TODO: add arabic here with custom font
+//                    CLAY_TEXT(
+//                        surahDetailsStrings[i],
+//                        CLAY_TEXT_CONFIG({
+//                             .textColor = fg1,
+//                             .fontId = g_roboto12,
+//                             .fontSize = 12,
+//                             .wrapMode = CLAY_TEXT_WRAP_WORDS,
+//                        })
+//                    );
                 }
             }
         }
@@ -795,8 +820,7 @@ static void LayoutQuranPage()
         for (int32_t page : uniquePages) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
-            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 16.0f * g_density, true);
-            g_fontManager.Register(fid, g_clayRenderer);
+            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
             for (int i = 0; i < totalAyahs; ++i) {
                 if (ayahPageNumbers[i] == page) {
                     ayahFontIds[i] = fid;
@@ -810,7 +834,7 @@ static void LayoutQuranPage()
         for (int i = 0; i < toLoad; ++i) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[i]);
-            uint16_t fid = g_fontManager.GetFontId(key);
+            uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
             if (fid != FontManager::kInvalidFontId &&
                 g_fontManager.EnsureFontLoaded(fid)) {
                 g_fontManager.Register(fid, g_clayRenderer);
@@ -825,7 +849,7 @@ static void LayoutQuranPage()
     for (int i = 0; i < 5 && pendingIdx < (int)pendingPages.size(); ++i, ++pendingIdx) {
         char key[64];
         snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[pendingIdx]);
-        uint16_t fid = g_fontManager.GetFontId(key);
+        uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
         if (fid != FontManager::kInvalidFontId &&
             g_fontManager.EnsureFontLoaded(fid)) {
             g_fontManager.Register(fid, g_clayRenderer);
@@ -863,7 +887,7 @@ static void LayoutQuranPage()
                 CLAY_STRING("<- Back"),
                 CLAY_TEXT_CONFIG({
                     .textColor = fg,
-                    .fontId = 0,
+                    .fontId = g_roboto18,
                     .fontSize = 18,
                     .wrapMode = CLAY_TEXT_WRAP_WORDS,
                 })

@@ -460,8 +460,6 @@ void ClayRenderer::DrawText(const Clay_RenderCommand& cmd)
     Clay_StringSlice str = textData.stringContents;
     Clay_Color c = textData.textColor;
 
-    atlas->SetSize((float)textData.fontSize * density);
-
     std::vector<float> verts;
     verts.reserve(256 * 4 * 4);
 

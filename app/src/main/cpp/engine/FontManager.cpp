@@ -12,10 +12,18 @@ void FontManager::Init(AAssetManager* mgr)
     mMgr = mgr;
 }
 
+std::string FontManager::MakeCompositeKey(const char* key, float size)
+{
+    return std::string(key) + "@" + std::to_string(size);
+}
+
 uint16_t FontManager::LoadSystem(const char* name, float size, bool rtl)
 {
-    uint16_t existing = GetFontId(name);
-    if (existing != kInvalidFontId) return existing;
+    std::string ck = MakeCompositeKey(name, size);
+    {
+        auto it = mKeyToFontId.find(ck);
+        if (it != mKeyToFontId.end()) return it->second;
+    }
 
     static const char* kFontPaths[] = {
         "/system/fonts/NotoSans-Regular.ttf",
@@ -29,7 +37,7 @@ uint16_t FontManager::LoadSystem(const char* name, float size, bool rtl)
         FontAtlas* atlas = new FontAtlas();
         if (atlas->LoadFromFile(fp, size)) {
             LOGI("loaded system font '%s' from %s", name, fp);
-            return AddEntry(name, size, rtl, atlas);
+            return AddEntry(ck, name, size, rtl, atlas);
         }
         delete atlas;
     }
@@ -41,8 +49,11 @@ uint16_t FontManager::LoadSystem(const char* name, float size, bool rtl)
 
 uint16_t FontManager::LoadAsset(const char* key, float size, bool rtl)
 {
-    uint16_t existing = GetFontId(key);
-    if (existing != kInvalidFontId) return existing;
+    std::string ck = MakeCompositeKey(key, size);
+    {
+        auto it = mKeyToFontId.find(ck);
+        if (it != mKeyToFontId.end()) return it->second;
+    }
 
     if (!mMgr) {
         LOGE("LoadAsset: no asset manager (key=%s)", key);
@@ -57,20 +68,24 @@ uint16_t FontManager::LoadAsset(const char* key, float size, bool rtl)
     }
 
     LOGI("loaded asset font '%s' rtl=%d", key, (int)rtl);
-    return AddEntry(key, size, rtl, atlas);
+    return AddEntry(ck, key, size, rtl, atlas);
 }
 
 uint16_t FontManager::GetOrCreateFontId(const char* key, float size, bool rtl)
 {
-    uint16_t existing = GetFontId(key);
-    if (existing != kInvalidFontId) return existing;
+    std::string ck = MakeCompositeKey(key, size);
+    {
+        auto it = mKeyToFontId.find(ck);
+        if (it != mKeyToFontId.end()) return it->second;
+    }
 
-    return AddEntry(key, size, rtl, nullptr);
+    return AddEntry(ck, key, size, rtl, nullptr);
 }
 
-uint16_t FontManager::GetFontId(const char* key) const
+uint16_t FontManager::GetFontId(const char* key, float size) const
 {
-    auto it = mKeyToFontId.find(key);
+    std::string ck = MakeCompositeKey(key, size);
+    auto it = mKeyToFontId.find(ck);
     if (it != mKeyToFontId.end()) return it->second;
     return kInvalidFontId;
 }
@@ -99,14 +114,14 @@ bool FontManager::EnsureFontLoaded(uint16_t fontId)
     }
 
     FontAtlas* atlas = new FontAtlas();
-    if (!atlas->Load(mMgr, entry.key.c_str(), entry.size)) {
+    if (!atlas->Load(mMgr, entry.path.c_str(), entry.size)) {
         delete atlas;
-        LOGE("EnsureFontLoaded failed: %s", entry.key.c_str());
+        LOGE("EnsureFontLoaded failed: %s", entry.path.c_str());
         return false;
     }
 
     entry.atlas = atlas;
-    LOGI("lazy loaded font '%s' (fontId=%u)", entry.key.c_str(), fontId);
+    LOGI("lazy loaded font '%s' (fontId=%u)", entry.path.c_str(), fontId);
     return true;
 }
 
@@ -134,10 +149,11 @@ void FontManager::Destroy()
     mKeyToFontId.clear();
 }
 
-uint16_t FontManager::AddEntry(const std::string& key, float size, bool rtl, FontAtlas* atlas)
+uint16_t FontManager::AddEntry(const std::string& compositeKey, const std::string& path,
+                                float size, bool rtl, FontAtlas* atlas)
 {
     uint16_t id = (uint16_t)mFonts.size();
-    mFonts.push_back({key, atlas, rtl, size});
-    mKeyToFontId[key] = id;
+    mFonts.push_back({compositeKey, path, atlas, rtl, size});
+    mKeyToFontId[compositeKey] = id;
     return id;
 }
