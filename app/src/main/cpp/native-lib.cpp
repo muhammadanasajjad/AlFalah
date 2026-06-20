@@ -30,13 +30,17 @@ static Clay_Color accent = { 0, 128, 66, 255 };
 static Clay_Color accent1 = { 2, 100, 53, 255 };
 static Clay_Color fg = { 255, 255, 255, 255 };
 
-enum class Page { Home, Quran };
+enum class Page { Home, Quran, SurahSelection };
 static Page g_currentPage = Page::Home;
+static int g_selectedSurah = 1;
 
 static Clay_Vector2 g_pointerPos = {0, 0};
+static Clay_Vector2 g_pointerDownPos = {0, 0};
 static bool g_pointerDown = false;
 static bool g_wasPointerDown = false;
+static bool g_pointerMovedSignificantly = false;
 static float g_deltaTime = 0.016f;
+static const float TAP_MOVE_THRESHOLD = 15.0f;
 static QuranDatabase g_quranDb;
 static int g_surfaceVersion = 0;
 
@@ -150,6 +154,11 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnTouch(
 {
     g_pointerPos.x = x / g_density;
     g_pointerPos.y = y / g_density;
+
+    if (down && !g_pointerDown) {
+        g_pointerDownPos = g_pointerPos;
+        g_pointerMovedSignificantly = false;
+    }
     g_pointerDown = down;
 }
 
@@ -516,6 +525,162 @@ static void LayoutHomePage()
     }
 }
 
+static void LayoutSurahSelectionPage()
+{
+    static std::vector<std::string> rowLabels;
+    static std::vector<std::string> pageTexts;
+    static std::vector<Clay_String> rowLabelStrings;
+    static std::vector<Clay_String> pageTextStrings;
+    static bool sBuilt = false;
+    static int sLastVersion = 0;
+
+    if (sLastVersion != g_surfaceVersion) {
+        sBuilt = false;
+        sLastVersion = g_surfaceVersion;
+    }
+
+    if (!sBuilt) {
+        rowLabels.resize(114);
+        pageTexts.resize(114);
+        rowLabelStrings.resize(114);
+        pageTextStrings.resize(114);
+        for (int i = 0; i < 114; ++i) {
+            const SurahInfo& info = g_quranDb.GetSurahInfo(i + 1);
+            rowLabels[i] = std::to_string(i + 1) + ". " + info.nameSimple;
+            if (info.startPage == info.endPage) {
+                pageTexts[i] = "Pg " + std::to_string(info.startPage);
+            } else {
+                pageTexts[i] = "Pg " + std::to_string(info.startPage) + "-" + std::to_string(info.endPage);
+            }
+            rowLabelStrings[i] = {
+                .isStaticallyAllocated = false,
+                .length = (int)rowLabels[i].length(),
+                .chars = rowLabels[i].c_str()
+            };
+            pageTextStrings[i] = {
+                .isStaticallyAllocated = false,
+                .length = (int)pageTexts[i].length(),
+                .chars = pageTexts[i].c_str()
+            };
+        }
+        sBuilt = true;
+    }
+
+    Clay_Color rowBg = { 31, 31, 22, 255 };
+    Clay_Color pageBg = { 45, 45, 32, 255 };
+
+    CLAY(
+        CLAY_ID("SurahSelectionRoot"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .padding = {
+                    .left = 16,
+                    .right = 16,
+                    .top = (uint16_t)(16 + (int)g_statusBarHeightDp),
+                    .bottom = 16
+                },
+                .childGap = 12,
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            },
+            .backgroundColor = bg,
+        }
+    ) {
+        CLAY(
+            CLAY_ID("SurahSelectionTopBar"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                    .childGap = 12,
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                }
+            }
+        ) {
+            CLAY(
+                CLAY_ID("SurahBackButton"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                CLAY_TEXT(
+                    CLAY_STRING("<- Back"),
+                    CLAY_TEXT_CONFIG({
+                        .textColor = fg,
+                        .fontId = 0,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
+
+            CLAY_TEXT(
+                CLAY_STRING("Select Surah"),
+                CLAY_TEXT_CONFIG({
+                    .textColor = fg,
+                    .fontId = 0,
+                    .fontSize = 22,
+                    .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                })
+            );
+        }
+
+        CLAY(
+            CLAY_ID("SurahListScroll"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .padding = CLAY_PADDING_ALL(8),
+                    .childGap = 2,
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                },
+                .backgroundColor = bg1,
+                .cornerRadius = {24, 24, 24, 24},
+                .clip = {
+                    .vertical = true,
+                    .childOffset = Clay_GetScrollOffset()
+                },
+            }
+        ) {
+            for (int i = 0; i < 114; ++i) {
+                const SurahInfo& info = g_quranDb.GetSurahInfo(i + 1);
+                Clay_String arabicStr = {
+                    .isStaticallyAllocated = false,
+                    .length = (int)info.nameArabic.length(),
+                    .chars = info.nameArabic.c_str()
+                };
+
+                CLAY(
+                    CLAY_IDI("SurahRow", i),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(52) },
+                            .padding = { .left = 12, .right = 8 },
+                            .childGap = 8,
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        },
+                        .backgroundColor = rowBg,
+                        .cornerRadius = {10, 10, 10, 10},
+                    }
+                ) {
+                    CLAY_TEXT(
+                        rowLabelStrings[i],
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = 0,
+                            .fontSize = 15,
+                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
+
 static void LayoutQuranPage()
 {
     static bool sLoaded = false;
@@ -526,8 +691,9 @@ static void LayoutQuranPage()
     static int pendingIdx = 0;
     static int totalAyahs = 0;
     static int lastVersion = 0;
+    static int s_lastSurah = 0;
 
-    if (lastVersion != g_surfaceVersion) {
+    if (lastVersion != g_surfaceVersion || s_lastSurah != g_selectedSurah) {
         sLoaded = false;
         ayahLines.clear();
         ayahStrings.clear();
@@ -536,10 +702,11 @@ static void LayoutQuranPage()
         pendingIdx = 0;
         totalAyahs = 0;
         lastVersion = g_surfaceVersion;
+        s_lastSurah = g_selectedSurah;
     }
 
     if (!sLoaded) {
-        const Surah& surah = g_quranDb.GetSurah(2);
+        const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
         totalAyahs = (int)surah.ayahs.size();
         ayahLines.reserve(totalAyahs);
         ayahStrings.reserve(totalAyahs);
@@ -639,7 +806,7 @@ static void LayoutQuranPage()
                 .layout = {
                     .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
                 },
-                .backgroundColor = Clay_Hovered() ? accent : bg1,
+                .backgroundColor = bg1,
                 .cornerRadius = {12, 12, 12, 12},
             }
         ) {
@@ -718,20 +885,43 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
             case Page::Quran:
                 LayoutQuranPage();
                 break;
+            case Page::SurahSelection:
+                LayoutSurahSelectionPage();
+                break;
         }
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
 
-    if (g_wasPointerDown && !g_pointerDown) {
+    if (g_pointerDown) {
+        float dx = g_pointerPos.x - g_pointerDownPos.x;
+        float dy = g_pointerPos.y - g_pointerDownPos.y;
+        if (dx * dx + dy * dy > TAP_MOVE_THRESHOLD * TAP_MOVE_THRESHOLD) {
+            g_pointerMovedSignificantly = true;
+        }
+    }
+
+    if (g_wasPointerDown && !g_pointerDown && !g_pointerMovedSignificantly) {
         switch (g_currentPage) {
             case Page::Home:
                 if (Clay_PointerOver(CLAY_ID("QuranButtonContainer"))) {
-                    g_currentPage = Page::Quran;
+                    g_currentPage = Page::SurahSelection;
                 }
                 break;
             case Page::Quran:
                 if (Clay_PointerOver(CLAY_ID("QuranBackButton"))) {
+                    g_currentPage = Page::SurahSelection;
+                }
+                break;
+            case Page::SurahSelection:
+                if (Clay_PointerOver(CLAY_ID("SurahBackButton"))) {
                     g_currentPage = Page::Home;
+                }
+                for (int i = 0; i < 114; ++i) {
+                    if (Clay_PointerOver(CLAY_IDI("SurahRow", i))) {
+                        g_selectedSurah = i + 1;
+                        g_currentPage = Page::Quran;
+                        break;
+                    }
                 }
                 break;
         }

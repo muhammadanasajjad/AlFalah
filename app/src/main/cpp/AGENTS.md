@@ -17,6 +17,7 @@ C++ native code lives in `app/src/main/cpp/`, bridged to Java/Kotlin via JNI.
 | `engine/renderer/ClayRenderer.hpp` | Clay → OpenGL render bridge |
 | `third_party/clay/clay.h` | Clay 0.14 (single-header UI lib) |
 | `MainActivity.java` | Android activity, GLSurfaceView, touch forwarding |
+| `quran/QuranDatabase.hpp` / `.cpp` | Quran data: surahs, ayahs, words, surah metadata (names, pages) |
 
 ## Clay Version — 0.14 (critical details)
 
@@ -44,29 +45,48 @@ C++ native code lives in `app/src/main/cpp/`, bridged to Java/Kotlin via JNI.
 
 ## Page System
 ```cpp
-enum class Page { Home, Quran };
+enum class Page { Home, Quran, SurahSelection };
 static Page g_currentPage;
+static int g_selectedSurah = 1; // 1-114
 ```
-- `LayoutHomePage()` — existing dashboard UI (unchanged, just refactored into a function).
-- `LayoutQuranPage()` — scrollable page with "← Back" button + scrollable Ayah list.
+- `LayoutHomePage()` — dashboard with "Qur'an" card (→ SurahSelection).
+- `LayoutQuranPage()` — scrollable Ayah list for `g_selectedSurah` with "← Back" button.
+- `LayoutSurahSelectionPage()` — scrollable list of 114 surahs (English name + Arabic name + page badge). Uses `CLAY_IDI("SurahRow", i)` for per-row IDs. Tapping a row sets `g_selectedSurah = i+1` and navigates to `Page::Quran`.
+- Navigation:
+  ```
+  Home → (tap "Qur'an") → SurahSelection → (tap surah) → Quran
+                         ↑                                   │
+                         └─────────── ("← Back") ←───────────┘
+                               ("← Back" on SurahSelection) → Home
+  ```
 - Page switching on tap detected in `nativeOnDrawFrame` after `Clay_EndLayout`:
   ```cpp
-  if (g_wasPointerDown && !g_pointerDown) {
-      if (Clay_PointerOver(CLAY_ID("QuranButtonContainer"))) g_currentPage = Page::Quran;
-      if (Clay_PointerOver(CLAY_ID("QuranBackButton")))     g_currentPage = Page::Home;
+  if (g_wasPointerDown && !g_pointerDown && !g_pointerMovedSignificantly) {
+      // per-page Clay_PointerOver checks
   }
   ```
+- `LayoutQuranPage` reloads ayah data when `g_selectedSurah` changes (via `s_lastSurah` static).
+
+## Surah Metadata (QuranDatabase)
+- `SurahInfo` struct: `nameSimple`, `nameArabic`, `startPage`, `endPage`, `verseCount`, `revelationPlace`.
+- Loaded from `quran-metadata-surah-name.csv` (114 rows) and page CSV's `surah_name` lines.
+- Access via `g_quranDb.GetSurahInfo(surahNumber)` / `GetSurahStartPage(surahNumber)`.
 
 ## Touch Handling
 ```
 MainActivity.java (OnTouchListener)
   → nativeOnTouch(x, y, down) [JNI]
-    → g_pointerPos, g_pointerDown globals
+    → g_pointerPos, g_pointerDown, g_pointerDownPos, g_pointerMovedSignificantly
       → nativeOnDrawFrame:
           1. Clay_SetPointerState(g_pointerPos, g_pointerDown)
           2. Clay_UpdateScrollContainers(true, {0,0}, g_deltaTime)
           3. Clay_BeginLayout() / Layout / Clay_EndLayout()
+          4. Movement check: if pointer moved >15dp from g_pointerDownPos → g_pointerMovedSignificantly=true
+          5. Tap detection: g_wasPointerDown && !g_pointerDown && !g_pointerMovedSignificantly
 ```
+
+### Tap Detection
+A tap is only recognised when the finger moves <15dp while pressed. This prevents scroll gestures on the surah list (or any scroll container) from accidentally triggering navigation.
 
 ### **Critical: ACTION_MOVE must send `down=true`**
 The Java touch handler MUST pass `true` for both `ACTION_DOWN` and `ACTION_MOVE`.  

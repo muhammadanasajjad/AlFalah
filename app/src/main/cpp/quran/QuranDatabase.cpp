@@ -28,6 +28,7 @@ std::string QuranDatabase::ReadAsset(AAssetManager* mgr, const char* path)
 void QuranDatabase::BuildPageMap(AAssetManager* mgr)
 {
     mWordToPage.clear();
+    mSurahToPage.clear();
 
     std::string csv = ReadAsset(mgr, "quran/surahsQPC/qpc-v2-15-lines.csv");
     if (csv.empty()) {
@@ -72,6 +73,14 @@ void QuranDatabase::BuildPageMap(AAssetManager* mgr)
 
         // Columns: page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number
         const std::string& lineType = fields[2];
+
+        if (lineType == "surah_name" && fields.size() >= 7) {
+            int32_t pageNum = std::stoi(fields[0]);
+            int32_t surahNum = std::stoi(fields[6]);
+            mSurahToPage[surahNum] = pageNum;
+            continue;
+        }
+
         if (lineType != "ayah") continue;
 
         const std::string& firstStr = fields[4];
@@ -87,7 +96,8 @@ void QuranDatabase::BuildPageMap(AAssetManager* mgr)
         }
     }
 
-    LOGI("built page map: %zu word->page entries", mWordToPage.size());
+    LOGI("built page map: %zu word->page entries, %zu surah->page entries",
+         mWordToPage.size(), mSurahToPage.size());
 }
 
 void QuranDatabase::Load(AAssetManager* mgr)
@@ -96,10 +106,80 @@ void QuranDatabase::Load(AAssetManager* mgr)
     mSurahs.reserve(114);
 
     BuildPageMap(mgr);
+    LoadSurahMetadata(mgr);
 
     for (int32_t i = 1; i <= 114; ++i) {
         LoadSurah(mgr, i);
     }
+}
+
+void QuranDatabase::LoadSurahMetadata(AAssetManager* mgr)
+{
+    mSurahInfo.clear();
+    mSurahInfo.reserve(114);
+
+    std::string csv = ReadAsset(mgr, "quran/quran-metadata-surah-name.csv");
+    if (csv.empty()) {
+        LOGE("failed to read surah metadata CSV");
+        return;
+    }
+
+    size_t pos = 0;
+    // Skip header line
+    pos = csv.find('\n');
+    if (pos == std::string::npos) return;
+    ++pos;
+
+    while (pos < csv.size() && mSurahInfo.size() < 114) {
+        size_t end = csv.find('\n', pos);
+        std::string line = csv.substr(pos, end - pos);
+        if (end == std::string::npos) break;
+        pos = end + 1;
+
+        if (line.empty()) continue;
+
+        SurahInfo info;
+        size_t start = 0;
+        int fieldIdx = 0;
+        for (size_t i = 0; i <= line.size() && fieldIdx <= 6; ++i) {
+            if (i == line.size() || line[i] == ',') {
+                std::string val = line.substr(start, i - start);
+                if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
+                    val = val.substr(1, val.size() - 2);
+                }
+                switch (fieldIdx) {
+                    case 1: info.nameSimple = val; break;
+                    case 2: info.nameArabic = val; break;
+                    case 4: info.revelationPlace = val; break;
+                    case 5: info.verseCount = std::stoi(val); break;
+                }
+                start = i + 1;
+                ++fieldIdx;
+            }
+        }
+
+        mSurahInfo.push_back(std::move(info));
+    }
+
+    for (int32_t i = 0; i < 114; ++i) {
+        int32_t surahNum = i + 1;
+        auto it = mSurahToPage.find(surahNum);
+        if (it != mSurahToPage.end()) {
+            mSurahInfo[i].startPage = it->second;
+        }
+    }
+
+    for (int32_t i = 0; i < 114; ++i) {
+        int32_t surahNum = i + 1;
+        auto it = mSurahToPage.find(surahNum + 1);
+        if (it != mSurahToPage.end()) {
+            mSurahInfo[i].endPage = it->second - 1;
+        } else {
+            mSurahInfo[i].endPage = 604;
+        }
+    }
+
+    LOGI("loaded %zu surah metadata entries", mSurahInfo.size());
 }
 
 void QuranDatabase::LoadSurah(AAssetManager* mgr, int32_t surahNumber)
@@ -210,4 +290,17 @@ const Ayah* QuranDatabase::GetAyah(int32_t surahNumber, int32_t ayahNumber) cons
         }
     }
     return nullptr;
+}
+
+const SurahInfo& QuranDatabase::GetSurahInfo(int32_t surahNumber) const
+{
+    return mSurahInfo[surahNumber - 1];
+}
+
+int32_t QuranDatabase::GetSurahStartPage(int32_t surahNumber) const
+{
+    if (surahNumber < 1 || surahNumber > static_cast<int32_t>(mSurahInfo.size())) {
+        return 0;
+    }
+    return mSurahInfo[surahNumber - 1].startPage;
 }
