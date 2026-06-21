@@ -18,6 +18,34 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NATIVE", __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "NATIVE", __VA_ARGS__)
 
+static JavaVM* g_jvm = nullptr;
+
+extern "C" jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
+static void CallJavaPlayAyah(int surah, int ayah) {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "playAyah", "(II)V");
+        if (method) {
+            env->CallStaticVoidMethod(clazz, method, surah, ayah);
+        }
+    }
+    if (needDetach) {
+        g_jvm->DetachCurrentThread();
+    }
+}
+
 static ClayRenderer g_clayRenderer;
 static FontManager g_fontManager;
 static uint16_t g_arabicFallbackFontId = FontManager::kInvalidFontId;
@@ -30,6 +58,8 @@ static uint64_t g_clayArenaSize = 0;
 static void* g_clayArena = nullptr;
 static float g_density = 1.0f;
 static float g_statusBarHeightDp = 0;
+static float g_screenWidthDp = 0;
+static float g_screenHeightDp = 0;
 static Clay_Color bg = { 19, 19, 10, 255 };
 static Clay_Color bg1 = { 31, 31, 22, 255 };
 static Clay_Color accent = { 0, 128, 66, 255 };
@@ -54,6 +84,15 @@ static bool g_pendingTapActive = false;
 static double g_pendingTapTime = 0;
 static Page g_pendingTapTargetPage = Page::Home;
 static int g_pendingTapSelectedSurah = 0;
+
+static bool g_showAyahMenu = false;
+static int g_menuSurah = 0;
+static int g_menuAyahNumber = 0;
+static bool g_menuActivatedThisTouch = false;
+static float g_menuPosX = 0, g_menuPosY = 0;
+static std::string g_menuInfoString;
+static std::vector<std::string> g_ayahTexts;
+static int g_totalAyahs = 0;
 
 static float g_deltaTime = 0.016f;
 static const float TAP_MOVE_THRESHOLD = 10.0f;
@@ -162,7 +201,9 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceChanged(
 {
 //    g_renderer.Resize(w, h);
     g_clayRenderer.SetResolution(w, h);
-    Clay_SetLayoutDimensions((Clay_Dimensions){ (float)w / g_density, (float)h / g_density });
+    g_screenWidthDp = (float)w / g_density;
+    g_screenHeightDp = (float)h / g_density;
+    Clay_SetLayoutDimensions((Clay_Dimensions){ g_screenWidthDp, g_screenHeightDp });
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -779,7 +820,6 @@ static void LayoutQuranPage()
     static std::vector<uint16_t> ayahFontIds;
     static std::vector<int32_t> pendingPages;
     static int pendingIdx = 0;
-    static int totalAyahs = 0;
     static int lastVersion = 0;
     static int s_lastSurah = 0;
 
@@ -790,20 +830,20 @@ static void LayoutQuranPage()
         ayahFontIds.clear();
         pendingPages.clear();
         pendingIdx = 0;
-        totalAyahs = 0;
+        g_totalAyahs = 0;
         lastVersion = g_surfaceVersion;
         s_lastSurah = g_selectedSurah;
     }
 
     if (!sLoaded) {
         const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
-        totalAyahs = (int)surah.ayahs.size();
-        ayahLines.reserve(totalAyahs);
-        ayahStrings.reserve(totalAyahs);
+        g_totalAyahs = (int)surah.ayahs.size();
+        ayahLines.reserve(g_totalAyahs);
+        ayahStrings.reserve(g_totalAyahs);
 
         std::unordered_set<int32_t> uniquePages;
         std::vector<int32_t> ayahPageNumbers;
-        ayahPageNumbers.reserve(totalAyahs);
+        ayahPageNumbers.reserve(g_totalAyahs);
 
         for (const auto& ayah : surah.ayahs) {
             std::string line;
@@ -829,15 +869,26 @@ static void LayoutQuranPage()
             });
         }
 
-        ayahFontIds.assign(totalAyahs, FontManager::kInvalidFontId);
+        ayahFontIds.assign(g_totalAyahs, FontManager::kInvalidFontId);
         pendingPages.clear();
+
+        g_ayahTexts = ayahLines;
+        // Rebuild ayahStrings to point to g_ayahTexts data (same memory as long-press check uses)
+        ayahStrings.clear();
+        for (auto& s : g_ayahTexts) {
+            ayahStrings.push_back({
+                .isStaticallyAllocated = false,
+                .length = (int)s.length(),
+                .chars = s.c_str()
+            });
+        }
 
         // Create fontIds for each unique page (lazy, not loaded yet)
         for (int32_t page : uniquePages) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
             uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
-            for (int i = 0; i < totalAyahs; ++i) {
+            for (int i = 0; i < g_totalAyahs; ++i) {
                 if (ayahPageNumbers[i] == page) {
                     ayahFontIds[i] = fid;
                 }
@@ -919,7 +970,6 @@ static void LayoutQuranPage()
                     .childGap = 16,
                     .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
-                .backgroundColor = bg1,
                 .cornerRadius = {24, 24, 24, 24},
                 .clip = {
                     .vertical = true,
@@ -933,11 +983,10 @@ static void LayoutQuranPage()
                     .layout = {
                         .sizing = { CLAY_SIZING_GROW(0) },
                         .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
-                    }
+                    },
                 }
             ) {
-                for (int i = 0; i < totalAyahs; ++i) {
-                    // Use page-specific font if loaded, otherwise fall back to Arabic fallback
+                for (int i = 0; i < g_totalAyahs; ++i) {
                     uint16_t fid = ayahFontIds[i];
                     if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
                         fid = g_arabicFallbackFontId;
@@ -963,7 +1012,8 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         JNIEnv*, jobject)
 {
     Clay_SetPointerState(g_pointerPos, g_pointerDown);
-    Clay_UpdateScrollContainers(true, (Clay_Vector2){0, 0}, g_deltaTime);
+    if (!g_showAyahMenu)
+        Clay_UpdateScrollContainers(true, (Clay_Vector2){0, 0}, g_deltaTime);
 
     Clay_BeginLayout();
     {
@@ -977,6 +1027,82 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
             case Page::SurahSelection:
                 LayoutSurahSelectionPage();
                 break;
+        }
+
+        if (g_showAyahMenu) {
+            const float menuW = (24*2) * g_density, menuH = 24*g_density;
+            float menuX = g_menuPosX - menuW/2;
+            float menuY = g_menuPosY - menuH;
+            if (menuX < 8) menuX = 8;
+            if (menuX + menuW > g_screenWidthDp - 8) menuX = g_screenWidthDp - menuW - 8;
+            if (menuY < g_statusBarHeightDp + 8) menuY = g_menuPosY + 20;
+            if (menuY + menuH > g_screenHeightDp - 8) menuY = g_screenHeightDp - menuH - 8;
+
+            g_menuInfoString = g_quranDb.GetSurahInfo(g_menuSurah).nameSimple
+                            + " " + std::to_string(g_menuAyahNumber);
+            Clay_String menuStr = {
+                .isStaticallyAllocated = false,
+                .length = (int32_t)g_menuInfoString.length(),
+                .chars = g_menuInfoString.c_str()
+            };
+
+            CLAY(
+                CLAY_ID("MenuBackdrop"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_GROW(1) },
+                    },
+                    .floating = {
+                        .zIndex = 10,
+                        .attachTo = CLAY_ATTACH_TO_PARENT,
+                        .pointerCaptureMode = CLAY_POINTER_CAPTURE_MODE_CAPTURE,
+                    }
+                }
+            ) {
+                CLAY(
+                    CLAY_ID("AyahMenu"),
+                    {
+                        .layout = {
+//                            .sizing = {  },
+                            .padding = CLAY_PADDING_ALL(14),
+                            .childGap = 10,
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        },
+                        .backgroundColor = bg1,
+                        .cornerRadius = {16, 16, 16, 16},
+                        .floating = {
+                            .offset = { menuX, menuY },
+                            .zIndex = 11,
+                            .attachTo = CLAY_ATTACH_TO_PARENT,
+                        },
+                    }
+                ) {
+                    CLAY(
+                        CLAY_ID("MenuPlayButton"),
+                        {
+                            .layout = {
+                                .sizing = {CLAY_SIZING_FIXED(24), CLAY_SIZING_FIXED(24) },
+                                .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                            },
+                            .image = {
+                                .imageData = ImageLoader::Get("images/playGreen.png")
+                            },
+                        }
+                    ) {}
+                    CLAY(
+                        CLAY_ID("MenuBookmarkButton"),
+                        {
+                            .layout = {
+                                .sizing = {CLAY_SIZING_FIXED(24), CLAY_SIZING_FIXED(24) },
+                                .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                            },
+                            .image = {
+                                .imageData = ImageLoader::Get("images/bookmarkGreen.png")
+                            },
+                        }
+                    ) {}
+                }
+            }
         }
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
@@ -997,7 +1123,35 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         double elapsedMs = (now - g_pointerDownTime) * 1000.0;
         if (elapsedMs >= LONG_PRESS_DURATION_MS) {
             g_longPressFired = true;
-            // Long press detected — add actions here as needed
+            if (g_currentPage == Page::Quran && !g_ayahTexts.empty()) {
+                LOGI("long press: scanning %d commands", commands.length);
+                for (int32_t ci = 0; ci < commands.length; ++ci) {
+                    const Clay_RenderCommand& cmd = commands.internalArray[ci];
+                    if (cmd.commandType != CLAY_RENDER_COMMAND_TYPE_TEXT) continue;
+                    const auto& bb = cmd.boundingBox;
+                    if (g_pointerPos.x >= bb.x && g_pointerPos.x < bb.x + bb.width &&
+                        g_pointerPos.y >= bb.y && g_pointerPos.y < bb.y + bb.height) {
+                        const char* ptr = cmd.renderData.text.stringContents.chars;
+                        LOGI("  text cmd at (%.0f,%.0f) chars=%p len=%d", bb.x, bb.y, ptr, cmd.renderData.text.stringContents.length);
+                        for (int i = 0; i < g_totalAyahs; ++i) {
+                            const std::string& ayah = g_ayahTexts[i];
+                            if (!ayah.empty() && ptr >= ayah.data() && ptr < ayah.data() + ayah.length()) {
+                                LOGI("  -> matched ayah %d", i);
+                                const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
+                                g_showAyahMenu = true;
+                                g_menuSurah = g_selectedSurah;
+                                g_menuAyahNumber = surah.ayahs[i].ayahNumber;
+                                g_menuActivatedThisTouch = true;
+                                g_menuPosX = g_pointerPos.x;
+                                g_menuPosY = g_pointerPos.y;
+                                break;
+                            }
+                        }
+                        if (g_showAyahMenu) break;
+                    }
+                }
+                if (!g_showAyahMenu) LOGI("  no ayah matched");
+            }
         }
     }
 
@@ -1006,8 +1160,17 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         double elapsedMs = (now - g_pointerDownTime) * 1000.0;
         bool isTap = !g_pointerMovedSignificantly && elapsedMs < TAP_MAX_DURATION_MS;
 
-        if (isTap) {
-            // Detect what was tapped and buffer the action
+        // Menu tap handling (fires on any tap while menu is visible)
+        if (g_showAyahMenu && isTap) {
+            if (Clay_PointerOver(CLAY_ID("MenuPlayButton"))) {
+                CallJavaPlayAyah(g_menuSurah, g_menuAyahNumber);
+                g_showAyahMenu = false;
+            } else if (Clay_PointerOver(CLAY_ID("MenuBackdrop"))) {
+                g_showAyahMenu = false;
+            }
+        }
+        // Normal navigation tap (only when menu is NOT active)
+        else if (isTap && !g_showAyahMenu) {
             Page targetPage = g_currentPage;
             int selectedSurah = 0;
 
@@ -1058,6 +1221,8 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 }
             }
         }
+
+        g_menuActivatedThisTouch = false;
     }
 
     // Execute pending single tap if double-tap window expired

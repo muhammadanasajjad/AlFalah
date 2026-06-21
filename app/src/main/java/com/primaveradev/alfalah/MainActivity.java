@@ -1,10 +1,13 @@
 package com.primaveradev.alfalah;
 
 import android.content.res.AssetManager;
+import android.media.MediaPlayer;
 import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.view.MotionEvent;
+
+import java.io.IOException;
 
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -15,6 +18,31 @@ public class MainActivity extends AppCompatActivity {
 
     static {
         System.loadLibrary("alfalah");
+    }
+
+    private static MediaPlayer sMediaPlayer;
+
+    public static void playAyah(int surah, int ayah) {
+        if (sMediaPlayer != null) {
+            sMediaPlayer.stop();
+            sMediaPlayer.release();
+            sMediaPlayer = null;
+        }
+        String url = String.format(
+            "https://cdn.islamic.network/quran/audio/128/ar.alafasy/%03d%03d.mp3",
+            surah, ayah);
+        sMediaPlayer = new MediaPlayer();
+        try {
+            sMediaPlayer.setDataSource(url);
+            sMediaPlayer.prepareAsync();
+            sMediaPlayer.setOnPreparedListener(mp -> mp.start());
+            sMediaPlayer.setOnCompletionListener(mp -> {
+                mp.release();
+                sMediaPlayer = null;
+            });
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     public native void nativeOnSurfaceCreated(AssetManager assetManager, float density);
