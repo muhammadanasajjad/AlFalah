@@ -76,17 +76,25 @@ static int g_selectedSurah = 1; // 1-114
 ```
 MainActivity.java (OnTouchListener)
   → nativeOnTouch(x, y, down) [JNI]
-    → g_pointerPos, g_pointerDown, g_pointerDownPos, g_pointerMovedSignificantly
+    → g_pointerPos, g_pointerDown, g_pointerDownPos, g_pointerDownTime, g_pointerMovedSignificantly
       → nativeOnDrawFrame:
           1. Clay_SetPointerState(g_pointerPos, g_pointerDown)
           2. Clay_UpdateScrollContainers(true, {0,0}, g_deltaTime)
           3. Clay_BeginLayout() / Layout / Clay_EndLayout()
-          4. Movement check: if pointer moved >15dp from g_pointerDownPos → g_pointerMovedSignificantly=true
-          5. Tap detection: g_wasPointerDown && !g_pointerDown && !g_pointerMovedSignificantly
+          4. Movement check: if pointer moved >10dp from g_pointerDownPos → g_pointerMovedSignificantly=true
+          5. Long press: finger held still >500ms & not moved → g_longPressFired
+          6. Tap (on release): wasDown && !isDown && moved<10dp && duration<300ms
+          7. Double-tap: two taps within 300ms window (single tap is buffered + delayed 300ms)
 ```
 
-### Tap Detection
-A tap is only recognised when the finger moves <15dp while pressed. This prevents scroll gestures on the surah list (or any scroll container) from accidentally triggering navigation.
+### Gesture Disambiguation (4 gestures)
+
+| Gesture | Distance | Time | Implementation |
+|---|---|---|---|
+| **Scroll** | >10dp from touch-down | any | Sets `g_pointerMovedSignificantly=true` → cancels tap/long-press. Clay handles drag scrolling. |
+| **Tap** | <10dp from touch-down | <300ms held | Buffered with 300ms delay to wait for possible double-tap, then page navigation fires. |
+| **Double tap** | <10dp from touch-down each | two taps within 300ms of each other | Cancels the buffered single tap and navigates directly on second tap release. |
+| **Long press / Hold** | <10dp from touch-down | >500ms held | Fires `g_longPressFired=true` once (one-shot). Add actions at `native-lib.cpp:1000`. |
 
 ### **Critical: ACTION_MOVE must send `down=true`**
 The Java touch handler MUST pass `true` for both `ACTION_DOWN` and `ACTION_MOVE`.  

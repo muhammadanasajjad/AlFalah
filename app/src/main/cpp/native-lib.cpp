@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <chrono>
 #include <unordered_set>
 #include "engine/renderer/Renderer.hpp"
 #include "engine/renderer/ClayRenderer.hpp"
@@ -45,8 +46,20 @@ static Clay_Vector2 g_pointerDownPos = {0, 0};
 static bool g_pointerDown = false;
 static bool g_wasPointerDown = false;
 static bool g_pointerMovedSignificantly = false;
+static double g_pointerDownTime = 0;
+static bool g_longPressFired = false;
+
+// Double-tap disambiguation: buffer single tap and delay execution
+static bool g_pendingTapActive = false;
+static double g_pendingTapTime = 0;
+static Page g_pendingTapTargetPage = Page::Home;
+static int g_pendingTapSelectedSurah = 0;
+
 static float g_deltaTime = 0.016f;
-static const float TAP_MOVE_THRESHOLD = 15.0f;
+static const float TAP_MOVE_THRESHOLD = 10.0f;
+static const double TAP_MAX_DURATION_MS = 300.0;
+static const double LONG_PRESS_DURATION_MS = 500.0;
+static const double DOUBLE_TAP_WINDOW_MS = 300.0;
 static QuranDatabase g_quranDb;
 static int g_surfaceVersion = 0;
 
@@ -169,6 +182,9 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnTouch(
     if (down && !g_pointerDown) {
         g_pointerDownPos = g_pointerPos;
         g_pointerMovedSignificantly = false;
+        g_pointerDownTime = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        g_longPressFired = false;
     }
     g_pointerDown = down;
 }
@@ -965,6 +981,9 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
 
+    double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
     if (g_pointerDown) {
         float dx = g_pointerPos.x - g_pointerDownPos.x;
         float dy = g_pointerPos.y - g_pointerDownPos.y;
@@ -973,32 +992,85 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         }
     }
 
-    if (g_wasPointerDown && !g_pointerDown && !g_pointerMovedSignificantly) {
-        switch (g_currentPage) {
-            case Page::Home:
-                if (Clay_PointerOver(CLAY_ID("QuranButtonContainer"))) {
-                    g_currentPage = Page::SurahSelection;
-                }
-                break;
-            case Page::Quran:
-                if (Clay_PointerOver(CLAY_ID("QuranBackButton"))) {
-                    g_currentPage = Page::SurahSelection;
-                }
-                break;
-            case Page::SurahSelection:
-                if (Clay_PointerOver(CLAY_ID("SurahBackButton"))) {
-                    g_currentPage = Page::Home;
-                }
-                for (int i = 0; i < 114; ++i) {
-                    if (Clay_PointerOver(CLAY_IDI("SurahRow", i))) {
-                        g_selectedSurah = i + 1;
-                        g_currentPage = Page::Quran;
-                        break;
-                    }
-                }
-                break;
+    // Long press: finger held still past threshold
+    if (g_pointerDown && !g_pointerMovedSignificantly && !g_longPressFired) {
+        double elapsedMs = (now - g_pointerDownTime) * 1000.0;
+        if (elapsedMs >= LONG_PRESS_DURATION_MS) {
+            g_longPressFired = true;
+            // Long press detected — add actions here as needed
         }
     }
+
+    // On finger release: check for tap or double-tap
+    if (g_wasPointerDown && !g_pointerDown) {
+        double elapsedMs = (now - g_pointerDownTime) * 1000.0;
+        bool isTap = !g_pointerMovedSignificantly && elapsedMs < TAP_MAX_DURATION_MS;
+
+        if (isTap) {
+            // Detect what was tapped and buffer the action
+            Page targetPage = g_currentPage;
+            int selectedSurah = 0;
+
+            switch (g_currentPage) {
+                case Page::Home:
+                    if (Clay_PointerOver(CLAY_ID("QuranButtonContainer")))
+                        targetPage = Page::SurahSelection;
+                    else
+                        isTap = false;
+                    break;
+                case Page::Quran:
+                    if (Clay_PointerOver(CLAY_ID("QuranBackButton")))
+                        targetPage = Page::SurahSelection;
+                    else
+                        isTap = false;
+                    break;
+                case Page::SurahSelection:
+                    if (Clay_PointerOver(CLAY_ID("SurahBackButton")))
+                        targetPage = Page::Home;
+                    else {
+                        isTap = false;
+                        for (int i = 0; i < 114; ++i) {
+                            if (Clay_PointerOver(CLAY_IDI("SurahRow", i))) {
+                                targetPage = Page::Quran;
+                                selectedSurah = i + 1;
+                                isTap = true;
+                                break;
+                            }
+                        }
+                    }
+                    break;
+            }
+
+            if (isTap) {
+                // Check if this is the second tap of a double-tap
+                if (g_pendingTapActive &&
+                    (now - g_pendingTapTime) * 1000.0 < DOUBLE_TAP_WINDOW_MS) {
+                    g_pendingTapActive = false;
+                    g_currentPage = targetPage;
+                    if (selectedSurah > 0)
+                        g_selectedSurah = selectedSurah;
+                } else {
+                    // Buffer as a pending single tap — wait for double-tap window
+                    g_pendingTapActive = true;
+                    g_pendingTapTime = now;
+                    g_pendingTapTargetPage = targetPage;
+                    g_pendingTapSelectedSurah = selectedSurah;
+                }
+            }
+        }
+    }
+
+    // Execute pending single tap if double-tap window expired
+    if (g_pendingTapActive) {
+        double elapsedMs = (now - g_pendingTapTime) * 1000.0;
+        if (elapsedMs >= DOUBLE_TAP_WINDOW_MS) {
+            g_pendingTapActive = false;
+            g_currentPage = g_pendingTapTargetPage;
+            if (g_pendingTapSelectedSurah > 0)
+                g_selectedSurah = g_pendingTapSelectedSurah;
+        }
+    }
+
     g_wasPointerDown = g_pointerDown;
 
     ImageLoader::FixAspectRatios(commands);
