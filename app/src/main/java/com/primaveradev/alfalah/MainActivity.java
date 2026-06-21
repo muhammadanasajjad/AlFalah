@@ -165,13 +165,14 @@ public class MainActivity extends AppCompatActivity {
             Log.i(TAG, "playAyah: background thread started");
             String path = fetchAudioUrl(surah, ayah);
             if (path == null) {
-                Log.i(TAG, "playAyah: API returned null, using CDN fallback");
+                Log.i(TAG, "playAyah: API failed, trying verses.quran.foundation CDN");
                 path = String.format(
-                    "https://cdn.islamic.network/quran/audio/128/ar.alafasy/%03d%03d.mp3",
+                    "https://verses.quran.foundation/Alafasy/mp3/%03d%03d.mp3",
                     surah, ayah);
             } else if (!path.startsWith("http")) {
                 path = "https://verses.quran.foundation/" + path;
                 Log.i(TAG, "playAyah: resolved relative URL to " + path);
+            } else {
                 Log.i(TAG, "playAyah: using absolute URL from API: " + path);
             }
             final String url = path;
