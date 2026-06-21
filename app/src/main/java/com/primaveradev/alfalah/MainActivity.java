@@ -135,8 +135,8 @@ public class MainActivity extends AppCompatActivity {
                     "https://cdn.islamic.network/quran/audio/128/ar.alafasy/%03d%03d.mp3",
                     surah, ayah);
             } else if (!path.startsWith("http")) {
-                path = "https://cdn.islamic.network/quran/audio/128/ar.alafasy/"
-                    + path.replace("Alafasy/mp3/", "");
+                String filename = path.substring(path.lastIndexOf('/') + 1);
+                path = "https://cdn.islamic.network/quran/audio/128/ar.alafasy/" + filename;
             }
             final String url = path;
             synchronized (sPlayerLock) {
