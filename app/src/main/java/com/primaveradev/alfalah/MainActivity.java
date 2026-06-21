@@ -6,12 +6,14 @@ import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.util.Base64;
+import android.util.Log;
 import android.view.MotionEvent;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -29,6 +31,8 @@ public class MainActivity extends AppCompatActivity {
         System.loadLibrary("alfalah");
     }
 
+    private static final String TAG = "AlFalah";
+
     private static MediaPlayer sMediaPlayer;
     private static final Object sPlayerLock = new Object();
 
@@ -44,8 +48,12 @@ public class MainActivity extends AppCompatActivity {
 
     private static synchronized String getAccessToken() {
         long now = System.currentTimeMillis() / 1000;
-        if (sAccessToken != null && now < sTokenExpiry - 60) return sAccessToken;
+        if (sAccessToken != null && now < sTokenExpiry - 60) {
+            Log.i(TAG, "getAccessToken: using cached token (expires in " + (sTokenExpiry - now) + "s)");
+            return sAccessToken;
+        }
 
+        Log.i(TAG, "getAccessToken: requesting new token from " + AUTH_URL);
         try {
             URL url = new URL(AUTH_URL);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -55,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
             String auth = "Basic " + Base64.encodeToString(creds.getBytes(), Base64.NO_WRAP);
             conn.setRequestProperty("Authorization", auth);
             conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
 
             String body = "grant_type=client_credentials&scope=content";
             try (OutputStream os = conn.getOutputStream()) {
@@ -62,7 +72,11 @@ public class MainActivity extends AppCompatActivity {
             }
 
             int code = conn.getResponseCode();
-            if (code != 200) return null;
+            Log.i(TAG, "getAccessToken: response code " + code);
+            if (code != 200) {
+                Log.w(TAG, "getAccessToken: failed with code " + code);
+                return null;
+            }
 
             BufferedReader br = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
@@ -74,28 +88,40 @@ public class MainActivity extends AppCompatActivity {
             JSONObject json = new JSONObject(sb.toString());
             sAccessToken = json.getString("access_token");
             sTokenExpiry = now + json.getInt("expires_in");
+            Log.i(TAG, "getAccessToken: obtained token, expires in " + json.getInt("expires_in") + "s");
             return sAccessToken;
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG, "getAccessToken: exception", e);
             return null;
         }
     }
 
     private static String fetchAudioUrl(int surah, int ayah) {
+        Log.i(TAG, "fetchAudioUrl: surah=" + surah + " ayah=" + ayah);
         String token = getAccessToken();
-        if (token == null) return null;
+        if (token == null) {
+            Log.w(TAG, "fetchAudioUrl: no access token, falling back");
+            return null;
+        }
 
         String endpoint = API_BASE + "/content/api/v4/chapters/" + surah
             + "/recitations/" + RECITATION_ID + "?per_page=50";
+        Log.i(TAG, "fetchAudioUrl: hitting " + endpoint);
 
         try {
             URL url = new URL(endpoint);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestProperty("x-auth-token", token);
             conn.setRequestProperty("x-client-id", CLIENT_ID);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
-            if (code != 200) return null;
+            Log.i(TAG, "fetchAudioUrl: response code " + code);
+            if (code != 200) {
+                Log.w(TAG, "fetchAudioUrl: API returned " + code);
+                return null;
+            }
 
             BufferedReader br = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
@@ -107,21 +133,28 @@ public class MainActivity extends AppCompatActivity {
             JSONObject json = new JSONObject(sb.toString());
             JSONArray files = json.getJSONArray("audio_files");
             String targetKey = surah + ":" + ayah;
+            Log.i(TAG, "fetchAudioUrl: got " + files.length() + " audio files, looking for " + targetKey);
             for (int i = 0; i < files.length(); i++) {
                 JSONObject f = files.getJSONObject(i);
-                if (f.getString("verse_key").equals(targetKey)) {
-                    return f.getString("url");
+                String vk = f.getString("verse_key");
+                if (vk.equals(targetKey)) {
+                    String urlStr = f.getString("url");
+                    Log.i(TAG, "fetchAudioUrl: found URL: " + urlStr);
+                    return urlStr;
                 }
             }
+            Log.w(TAG, "fetchAudioUrl: verse_key " + targetKey + " not found in response");
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG, "fetchAudioUrl: exception", e);
         }
         return null;
     }
 
     public static void playAyah(int surah, int ayah) {
+        Log.i(TAG, "playAyah(" + surah + ", " + ayah + ") called from JNI");
         synchronized (sPlayerLock) {
             if (sMediaPlayer != null) {
+                Log.i(TAG, "playAyah: stopping previous playback");
                 sMediaPlayer.stop();
                 sMediaPlayer.release();
                 sMediaPlayer = null;
@@ -129,30 +162,49 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new Thread(() -> {
+            Log.i(TAG, "playAyah: background thread started");
             String path = fetchAudioUrl(surah, ayah);
             if (path == null) {
+                Log.i(TAG, "playAyah: API returned null, using CDN fallback");
                 path = String.format(
                     "https://cdn.islamic.network/quran/audio/128/ar.alafasy/%03d%03d.mp3",
                     surah, ayah);
             } else if (!path.startsWith("http")) {
                 String filename = path.substring(path.lastIndexOf('/') + 1);
                 path = "https://cdn.islamic.network/quran/audio/128/ar.alafasy/" + filename;
+                Log.i(TAG, "playAyah: resolved relative URL to " + path);
+            } else {
+                Log.i(TAG, "playAyah: using absolute URL from API: " + path);
             }
             final String url = path;
+            Log.i(TAG, "playAyah: final audio URL: " + url);
             synchronized (sPlayerLock) {
                 sMediaPlayer = new MediaPlayer();
                 try {
                     sMediaPlayer.setDataSource(url);
                     sMediaPlayer.prepareAsync();
-                    sMediaPlayer.setOnPreparedListener(mp -> mp.start());
+                    Log.i(TAG, "playAyah: MediaPlayer created, preparing async");
+                    sMediaPlayer.setOnPreparedListener(mp -> {
+                        Log.i(TAG, "playAyah: prepared, starting playback");
+                        mp.start();
+                    });
                     sMediaPlayer.setOnCompletionListener(mp -> {
+                        Log.i(TAG, "playAyah: playback completed");
                         synchronized (sPlayerLock) {
                             mp.release();
                             sMediaPlayer = null;
                         }
                     });
+                    sMediaPlayer.setOnErrorListener((mp, what, extra) -> {
+                        Log.e(TAG, "playAyah: MediaPlayer error what=" + what + " extra=" + extra);
+                        synchronized (sPlayerLock) {
+                            mp.release();
+                            sMediaPlayer = null;
+                        }
+                        return true;
+                    });
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    Log.e(TAG, "playAyah: setDataSource exception", e);
                 }
             }
         }).start();

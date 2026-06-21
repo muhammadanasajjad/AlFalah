@@ -26,20 +26,29 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 static void CallJavaPlayAyah(int surah, int ayah) {
-    if (!g_jvm) return;
+    LOGI("CallJavaPlayAyah(%d, %d)", surah, ayah);
+    if (!g_jvm) { LOGI("  g_jvm is null"); return; }
     JNIEnv* env;
     bool needDetach = false;
     jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
     if (ret != JNI_OK) {
         g_jvm->AttachCurrentThread(&env, nullptr);
         needDetach = true;
+        LOGI("  attached to JNI thread");
     }
     jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
     if (clazz) {
+        LOGI("  found MainActivity class");
         jmethodID method = env->GetStaticMethodID(clazz, "playAyah", "(II)V");
         if (method) {
+            LOGI("  calling playAyah static method");
             env->CallStaticVoidMethod(clazz, method, surah, ayah);
+            LOGI("  playAyah returned");
+        } else {
+            LOGI("  could not find playAyah method!");
         }
+    } else {
+        LOGI("  could not find MainActivity class!");
     }
     if (needDetach) {
         g_jvm->DetachCurrentThread();
@@ -1163,9 +1172,12 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         // Menu tap handling (fires on any tap while menu is visible)
         if (g_showAyahMenu && isTap) {
             if (Clay_PointerOver(CLAY_ID("MenuPlayButton"))) {
+                LOGI("play button tapped: surah=%d ayah=%d",
+                     g_menuSurah, g_menuAyahNumber);
                 CallJavaPlayAyah(g_menuSurah, g_menuAyahNumber);
                 g_showAyahMenu = false;
             } else if (Clay_PointerOver(CLAY_ID("MenuBackdrop"))) {
+                LOGI("menu backdrop tapped — closing menu");
                 g_showAyahMenu = false;
             }
         }
