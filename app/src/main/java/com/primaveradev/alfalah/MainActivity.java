@@ -36,11 +36,11 @@ public class MainActivity extends AppCompatActivity {
     private static MediaPlayer sMediaPlayer;
     private static final Object sPlayerLock = new Object();
 
-    // Quran Foundation API — production
-    private static final String CLIENT_ID = "2ca5c4ac-4dad-4186-af9a-3f736614a241";
-    private static final String CLIENT_SECRET = "cBvlkVG.cLfiJDFa47RVMj5I9z";
-    private static final String AUTH_URL = "https://oauth2.quran.foundation/oauth2/token";
-    private static final String API_BASE = "https://apis.quran.foundation";
+    // Quran Foundation API — pre-production (production returned 404 for recitations)
+    private static final String CLIENT_ID = "07aa145f-ab4e-453f-95fa-65c75e2a7e0d";
+    private static final String CLIENT_SECRET = "yyttJn5e-N7fpAPUCtnHm4rdos";
+    private static final String AUTH_URL = "https://prelive-oauth2.quran.foundation/oauth2/token";
+    private static final String API_BASE = "https://apis-prelive.quran.foundation";
     private static final int RECITATION_ID = 7; // Mishari Rashid al-Afasy (Murattal)
 
     private static String sAccessToken = null;
@@ -170,10 +170,8 @@ public class MainActivity extends AppCompatActivity {
                     "https://cdn.islamic.network/quran/audio/128/ar.alafasy/%03d%03d.mp3",
                     surah, ayah);
             } else if (!path.startsWith("http")) {
-                String filename = path.substring(path.lastIndexOf('/') + 1);
-                path = "https://cdn.islamic.network/quran/audio/128/ar.alafasy/" + filename;
+                path = "https://verses.quran.foundation/" + path;
                 Log.i(TAG, "playAyah: resolved relative URL to " + path);
-            } else {
                 Log.i(TAG, "playAyah: using absolute URL from API: " + path);
             }
             final String url = path;
