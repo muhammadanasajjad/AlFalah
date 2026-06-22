@@ -10,6 +10,7 @@ struct Word {
     int32_t wordNumber;
     std::string text;
     int32_t pageNumber = 0;
+    int32_t lineNumber = 0;
 };
 
 struct Ayah {
@@ -31,6 +32,21 @@ struct SurahInfo {
     std::string revelationPlace;
 };
 
+struct PageLine {
+    int32_t pageNumber;
+    int32_t lineNumber;
+    std::string lineType;    // "ayah", "surah_name", "basmallah"
+    bool isCentered;
+    int32_t firstWordId = 0;
+    int32_t lastWordId = 0;
+    int32_t surahNumber = 0;
+};
+
+struct PageLayout {
+    int32_t pageNumber;
+    std::vector<PageLine> lines;
+};
+
 class QuranDatabase {
 public:
     void Load(AAssetManager* mgr);
@@ -42,6 +58,12 @@ public:
     const SurahInfo& GetSurahInfo(int32_t surahNumber) const;
     int32_t GetSurahStartPage(int32_t surahNumber) const;
 
+    // Mushaf format accessors
+    const PageLayout& GetPageLayout(int32_t pageNumber) const;
+    int32_t GetWordLine(int32_t wordId) const;
+    const std::string* GetWordText(int32_t wordId) const;
+    bool HasPageLayout(int32_t pageNumber) const;
+
 private:
     void BuildPageMap(AAssetManager* mgr);
     void LoadSurah(AAssetManager* mgr, int32_t surahNumber);
@@ -51,5 +73,8 @@ private:
     std::vector<Surah> mSurahs;
     std::vector<SurahInfo> mSurahInfo;
     std::unordered_map<int32_t, int32_t> mWordToPage;
+    std::unordered_map<int32_t, int32_t> mWordToLine;
     std::unordered_map<int32_t, int32_t> mSurahToPage;
+    std::unordered_map<int32_t, PageLayout> mPageLayouts;
+    std::unordered_map<int32_t, std::string> mWordTextById;
 };

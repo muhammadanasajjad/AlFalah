@@ -400,7 +400,7 @@ typedef struct Clay_TextElementConfig {
     // The debug view will pass fontId = 0 for its internal text.
     uint16_t fontId;
     // Controls the size of the font. Handled by the function provided to Clay_MeasureText.
-    uint16_t fontSize;
+    float fontSize;
     // Controls extra horizontal spacing between characters. Handled by the function provided to Clay_MeasureText.
     uint16_t letterSpacing;
     // Controls additional vertical space between wrapped lines of text.
@@ -661,7 +661,7 @@ typedef struct Clay_TextRenderData {
     Clay_Color textColor;
     // An integer representing the font to use to render this text, transparently passed through from the text declaration.
     uint16_t fontId;
-    uint16_t fontSize;
+    float fontSize;
     // Specifies the extra whitespace gap in pixels between each character.
     uint16_t letterSpacing;
     // The height of the bounding box for this line of text.
@@ -1647,7 +1647,7 @@ uint32_t Clay__HashStringContentsWithConfig(Clay_String *text, Clay_TextElementC
     hash += (hash << 10);
     hash ^= (hash >> 6);
 
-    hash += config->fontSize;
+    hash += (uint16_t)(config->fontSize * 10.0f);
     hash += (hash << 10);
     hash ^= (hash >> 6);
 

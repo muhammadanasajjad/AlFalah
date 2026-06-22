@@ -111,6 +111,10 @@ static const double DOUBLE_TAP_WINDOW_MS = 300.0;
 static QuranDatabase g_quranDb;
 static int g_surfaceVersion = 0;
 
+enum class QuranDisplayMode { Standard, Mushaf };
+static QuranDisplayMode g_quranDisplayMode = QuranDisplayMode::Standard;
+static int g_quranModeVersion = 0;
+
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
                                     void*)
@@ -125,7 +129,7 @@ static Clay_Dimensions MeasureText(Clay_StringSlice text,
     hb_script_t script = isRtl ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN;
     const char* lang = isRtl ? "ar" : "en";
 
-    atlas->SetSize((float)config->fontSize * g_density);
+    atlas->SetSize(config->fontSize * g_density);
 
     hb_font_t* hbFont = atlas->GetHbFont();
     if (!hbFont) return { 0, 0 };
@@ -938,36 +942,72 @@ static void LayoutQuranPage()
             .layout = {
                 .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
                 .padding = {
-                        .left = 24,
-                        .right = 24,
-                        .top = (uint16_t)(24 + (int)g_statusBarHeightDp),
-                        .bottom = 24
+                    .left = 12,
+                    .right = 12,
+                    .top = (uint16_t)(12 + (int)g_statusBarHeightDp),
+                    .bottom = 12
                 },
-                .childGap = 24,
+                .childGap = 12,
                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
             },
             .backgroundColor = bg,
         }
     ) {
         CLAY(
-            CLAY_ID("QuranBackButton"),
+            CLAY_ID("QuranTopBar"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
-                },
-                .backgroundColor = bg1,
-                .cornerRadius = {12, 12, 12, 12},
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                    .childGap = 12,
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                }
             }
         ) {
-            CLAY_TEXT(
-                CLAY_STRING("<- Back"),
-                CLAY_TEXT_CONFIG({
-                    .textColor = fg,
-                    .fontId = g_roboto18,
-                    .fontSize = 18,
-                    .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                })
-            );
+            CLAY(
+                CLAY_ID("QuranBackButton"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                CLAY_TEXT(
+                    CLAY_STRING("<- Back"),
+                    CLAY_TEXT_CONFIG({
+                        .textColor = fg,
+                        .fontId = g_roboto18,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
+
+            CLAY(
+                CLAY_ID("QuranModeToggle"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(48) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT, .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                }
+            ) {
+                static Clay_String sToggleLabel = {
+                    .isStaticallyAllocated = true,
+                    .length = 6,
+                    .chars = "Mushaf"
+                };
+                CLAY_TEXT(
+                    sToggleLabel,
+                    CLAY_TEXT_CONFIG({
+                        .textColor = accent,
+                        .fontId = g_roboto18,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
         }
 
         CLAY(
@@ -1016,6 +1056,294 @@ static void LayoutQuranPage()
     }
 }
 
+static float MeasureMushafWidth(const std::string& text, uint16_t fontId, float fontSize)
+{
+    FontAtlas* atlas = g_fontManager.GetAtlas(fontId);
+    if (!atlas) return 0;
+    atlas->SetSize(fontSize * g_density);
+    hb_font_t* hbFont = atlas->GetHbFont();
+    if (!hbFont) return 0;
+    hb_buffer_t* buf = hb_buffer_create();
+    hb_buffer_add_utf8(buf, text.c_str(), (int)text.length(), 0, (int)text.length());
+    hb_buffer_set_direction(buf, HB_DIRECTION_RTL);
+    hb_buffer_set_script(buf, HB_SCRIPT_ARABIC);
+    hb_buffer_set_language(buf, hb_language_from_string("ar", 2));
+    hb_shape(hbFont, buf, nullptr, 0);
+    unsigned int count = 0;
+    hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
+    float total = 0;
+    for (unsigned int i = 0; i < count; ++i)
+        total += (float)pos[i].x_advance / 64.0f;
+    hb_buffer_destroy(buf);
+    // RTL x_advance is negative; take absolute value for width
+    return (total < 0 ? -total : total) / g_density;
+}
+
+static void LayoutQuranPageMushaf()
+{
+    static bool sLoaded = false;
+    static std::vector<std::string> lineTexts;
+    static std::vector<Clay_String> lineStrings;
+    static std::vector<uint16_t> lineFontIds;
+    static std::vector<float> lineFontSizes;
+    static std::vector<bool> lineCentered;
+    static int lastVersion = 0;
+    static int s_lastSurah = 0;
+    static int s_lastModeVersion = 0;
+    static int totalLines = 0;
+
+    if (lastVersion != g_surfaceVersion || s_lastSurah != g_selectedSurah ||
+        s_lastModeVersion != g_quranModeVersion) {
+        sLoaded = false;
+        lineTexts.clear();
+        lineStrings.clear();
+        lineFontIds.clear();
+        lineFontSizes.clear();
+        lineCentered.clear();
+        totalLines = 0;
+        lastVersion = g_surfaceVersion;
+        s_lastSurah = g_selectedSurah;
+        s_lastModeVersion = g_quranModeVersion;
+    }
+
+    if (!sLoaded) {
+        const SurahInfo& info = g_quranDb.GetSurahInfo(g_selectedSurah);
+        int32_t startPage = info.startPage;
+        int32_t endPage = info.endPage;
+        LOGI("Mushaf: surah %d pages %d-%d", g_selectedSurah, startPage, endPage);
+
+        std::vector<int32_t> linePages;
+        std::unordered_set<int32_t> uniquePages;
+
+        float availWidth = g_screenWidthDp - 12.0f - 12.0f - 15.0f - 15.0f;
+
+        for (int32_t page = startPage; page <= endPage; ++page) {
+            const PageLayout& layout = g_quranDb.GetPageLayout(page);
+            if (layout.lines.empty()) {
+                LOGI("Mushaf: page %d no layout", page);
+                continue;
+            }
+            LOGI("Mushaf: page %d has %zu lines", page, layout.lines.size());
+
+            for (const auto& pl : layout.lines) {
+                LOGI("Mushaf: line type=%s surah=%d first=%d last=%d centered=%d",
+                     pl.lineType.c_str(), pl.surahNumber, pl.firstWordId, pl.lastWordId, pl.isCentered);
+                if (pl.surahNumber != g_selectedSurah) {
+                    LOGI("Mushaf: skipping line surah %d != %d", pl.surahNumber, g_selectedSurah);
+                    continue;
+                }
+
+                std::string text;
+                if (pl.lineType == "surah_name") {
+                    const SurahInfo& sinfo = g_quranDb.GetSurahInfo(pl.surahNumber);
+                    text = sinfo.nameArabic;
+                } else if (pl.lineType == "basmallah") {
+                    text = "\xD8\xA8\xD9\x90\xD8\xB3\xD9\x92\xD9\x85\xD9\x90 \xD8\xA7\xD9\x84\xD9\x84\xD9\x91\xD9\x87\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x92\xD9\x85\xD9\x8E\xD9\x86\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x90\xD9\x8A\xD9\x85\xD9\x90";
+                } else if (pl.lineType == "ayah") {
+                    int wordCount = 0;
+                    for (int32_t wid = pl.firstWordId; wid <= pl.lastWordId; ++wid) {
+                        const std::string* wordText = g_quranDb.GetWordText(wid);
+                        if (wordText) {
+                            if (!text.empty()) text += ' ';
+                            text += *wordText;
+                            ++wordCount;
+                        }
+                    }
+                    LOGI("Mushaf: line %d words %d-%d found %d",
+                         pl.lineNumber, pl.firstWordId, pl.lastWordId, wordCount);
+                }
+
+                lineTexts.push_back(std::move(text));
+                lineCentered.push_back(pl.isCentered);
+                linePages.push_back(page);
+                uniquePages.insert(page);
+            }
+        }
+        LOGI("Mushaf: total lines %zu", lineTexts.size());
+
+        totalLines = (int)lineTexts.size();
+
+        for (auto& s : lineTexts) {
+            lineStrings.push_back({
+                .isStaticallyAllocated = false,
+                .length = (int)s.length(),
+                .chars = s.c_str()
+            });
+        }
+
+        lineFontIds.assign(totalLines, FontManager::kInvalidFontId);
+        lineFontSizes.assign(totalLines, 28.0f);
+
+        // Load all page fonts synchronously so we measure with each page's own font
+        for (int32_t page : uniquePages) {
+            char key[64];
+            snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
+            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+            if (fid != FontManager::kInvalidFontId &&
+                g_fontManager.EnsureFontLoaded(fid)) {
+                g_fontManager.Register(fid, g_clayRenderer);
+            }
+            for (int i = 0; i < totalLines; ++i) {
+                if (linePages[i] == page) {
+                    lineFontIds[i] = fid;
+                }
+            }
+        }
+
+        // Now measure each page with its actual page font
+        for (int32_t page : uniquePages) {
+            uint16_t pageFontId = FontManager::kInvalidFontId;
+            for (int i = 0; i < totalLines; ++i) {
+                if (linePages[i] == page) {
+                    pageFontId = lineFontIds[i];
+                    break;
+                }
+            }
+            if (pageFontId == FontManager::kInvalidFontId) continue;
+
+            float bestSize = 28.0f;
+            for (float size = 28.0f; size >= 15.0f; size -= 0.1f) {
+                bool allFit = true;
+                for (int i = 0; i < totalLines; ++i) {
+                    if (linePages[i] != page) continue;
+                    float w = MeasureMushafWidth(lineTexts[i], pageFontId, size);
+                    if (w > availWidth) { allFit = false; break; }
+                }
+                if (allFit) { bestSize = size; break; }
+            }
+            LOGI("Mushaf: page %d font size %.1f", page, bestSize);
+            for (int i = 0; i < totalLines; ++i) {
+                if (linePages[i] == page) {
+                    lineFontSizes[i] = bestSize;
+                }
+            }
+        }
+
+        sLoaded = true;
+    }
+
+    CLAY(
+        CLAY_ID("Root"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .padding = {
+                    .left = 12,
+                    .right = 12,
+                    .top = (uint16_t)(12 + (int)g_statusBarHeightDp),
+                    .bottom = 12
+                },
+                .childGap = 12,
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            },
+            .backgroundColor = bg,
+        }
+    ) {
+        CLAY(
+            CLAY_ID("QuranTopBar"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                    .childGap = 12,
+                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                }
+            }
+        ) {
+            CLAY(
+                CLAY_ID("QuranBackButton"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                CLAY_TEXT(
+                    CLAY_STRING("<- Back"),
+                    CLAY_TEXT_CONFIG({
+                        .textColor = fg,
+                        .fontId = g_roboto18,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
+
+            CLAY(
+                CLAY_ID("QuranModeToggle"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(48) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT, .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                }
+            ) {
+                static Clay_String sToggleLabel = {
+                    .isStaticallyAllocated = true,
+                    .length = 8,
+                    .chars = "Standard"
+                };
+                CLAY_TEXT(
+                    sToggleLabel,
+                    CLAY_TEXT_CONFIG({
+                        .textColor = accent,
+                        .fontId = g_roboto18,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
+        }
+
+        CLAY(
+            CLAY_ID("MushafScrollContainer"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                    .padding = CLAY_PADDING_ALL(15),
+                    .childGap = 8,
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                },
+                .cornerRadius = {24, 24, 24, 24},
+                .clip = {
+                    .vertical = true,
+                    .childOffset = Clay_GetScrollOffset()
+                },
+            }
+        ) {
+            for (int i = 0; i < totalLines; ++i) {
+                uint16_t fid = lineFontIds[i];
+                if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
+                    fid = g_arabicFallbackFontId;
+                }
+
+                CLAY(
+                    CLAY_IDI("MushafLine", i),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0) },
+                            .childAlignment = {
+                                .x = lineCentered[i] ? CLAY_ALIGN_X_CENTER : CLAY_ALIGN_X_RIGHT,
+                            },
+                        },
+                    }
+                ) {
+                    CLAY_TEXT(
+                        lineStrings[i],
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = fid,
+                            .fontSize = lineFontSizes[i],
+                            .textAlignment = lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         JNIEnv*, jobject)
@@ -1031,7 +1359,10 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 LayoutHomePage();
                 break;
             case Page::Quran:
-                LayoutQuranPage();
+                if (g_quranDisplayMode == QuranDisplayMode::Mushaf)
+                    LayoutQuranPageMushaf();
+                else
+                    LayoutQuranPage();
                 break;
             case Page::SurahSelection:
                 LayoutSurahSelectionPage();
@@ -1196,7 +1527,15 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 case Page::Quran:
                     if (Clay_PointerOver(CLAY_ID("QuranBackButton")))
                         targetPage = Page::SurahSelection;
-                    else
+                    else if (Clay_PointerOver(CLAY_ID("QuranModeToggle"))) {
+                        if (g_quranDisplayMode == QuranDisplayMode::Standard)
+                            g_quranDisplayMode = QuranDisplayMode::Mushaf;
+                        else
+                            g_quranDisplayMode = QuranDisplayMode::Standard;
+                        ++g_quranModeVersion;
+                        isTap = true;
+                        targetPage = Page::Quran;
+                    } else
                         isTap = false;
                     break;
                 case Page::SurahSelection:
