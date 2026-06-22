@@ -1079,42 +1079,38 @@ static float MeasureMushafWidth(const std::string& text, uint16_t fontId, float 
     return (total < 0 ? -total : total) / g_density;
 }
 
+struct MushafCacheEntry {
+    std::vector<std::string> lineTexts;
+    std::vector<bool> lineCentered;
+    std::vector<int32_t> linePages;
+    std::vector<uint16_t> lineFontIds;
+    std::vector<float> lineFontSizes;
+    int totalLines = 0;
+};
+
 static void LayoutQuranPageMushaf()
 {
-    static bool sLoaded = false;
-    static std::vector<std::string> lineTexts;
-    static std::vector<Clay_String> lineStrings;
-    static std::vector<uint16_t> lineFontIds;
-    static std::vector<float> lineFontSizes;
-    static std::vector<bool> lineCentered;
-    static int lastVersion = 0;
-    static int s_lastSurah = 0;
-    static int s_lastModeVersion = 0;
-    static int totalLines = 0;
+    static std::unordered_map<int32_t, MushafCacheEntry> s_cache;
+    static int s_lastVersion = 0;
+    static float s_lastScreenWidth = 0;
+    static std::vector<Clay_String> s_lineStrings;
 
-    if (lastVersion != g_surfaceVersion || s_lastSurah != g_selectedSurah ||
-        s_lastModeVersion != g_quranModeVersion) {
-        sLoaded = false;
-        lineTexts.clear();
-        lineStrings.clear();
-        lineFontIds.clear();
-        lineFontSizes.clear();
-        lineCentered.clear();
-        totalLines = 0;
-        lastVersion = g_surfaceVersion;
-        s_lastSurah = g_selectedSurah;
-        s_lastModeVersion = g_quranModeVersion;
+    if (s_lastVersion != g_surfaceVersion || s_lastScreenWidth != g_screenWidthDp) {
+        s_cache.clear();
+        s_lastVersion = g_surfaceVersion;
+        s_lastScreenWidth = g_screenWidthDp;
     }
 
-    if (!sLoaded) {
+    auto it = s_cache.find(g_selectedSurah);
+    if (it == s_cache.end()) {
+        MushafCacheEntry entry;
+
         const SurahInfo& info = g_quranDb.GetSurahInfo(g_selectedSurah);
         int32_t startPage = info.startPage;
         int32_t endPage = info.endPage;
         LOGI("Mushaf: surah %d pages %d-%d", g_selectedSurah, startPage, endPage);
 
-        std::vector<int32_t> linePages;
         std::unordered_set<int32_t> uniquePages;
-
         float availWidth = g_screenWidthDp - 12.0f - 12.0f - 15.0f - 15.0f;
 
         for (int32_t page = startPage; page <= endPage; ++page) {
@@ -1153,28 +1149,19 @@ static void LayoutQuranPageMushaf()
                          pl.lineNumber, pl.firstWordId, pl.lastWordId, wordCount);
                 }
 
-                lineTexts.push_back(std::move(text));
-                lineCentered.push_back(pl.isCentered);
-                linePages.push_back(page);
+                entry.lineTexts.push_back(std::move(text));
+                entry.lineCentered.push_back(pl.isCentered);
+                entry.linePages.push_back(page);
                 uniquePages.insert(page);
             }
         }
-        LOGI("Mushaf: total lines %zu", lineTexts.size());
+        LOGI("Mushaf: total lines %zu", entry.lineTexts.size());
 
-        totalLines = (int)lineTexts.size();
+        entry.totalLines = (int)entry.lineTexts.size();
 
-        for (auto& s : lineTexts) {
-            lineStrings.push_back({
-                .isStaticallyAllocated = false,
-                .length = (int)s.length(),
-                .chars = s.c_str()
-            });
-        }
+        entry.lineFontIds.assign(entry.totalLines, FontManager::kInvalidFontId);
+        entry.lineFontSizes.assign(entry.totalLines, 28.0f);
 
-        lineFontIds.assign(totalLines, FontManager::kInvalidFontId);
-        lineFontSizes.assign(totalLines, 28.0f);
-
-        // Load all page fonts synchronously so we measure with each page's own font
         for (int32_t page : uniquePages) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
@@ -1183,43 +1170,53 @@ static void LayoutQuranPageMushaf()
                 g_fontManager.EnsureFontLoaded(fid)) {
                 g_fontManager.Register(fid, g_clayRenderer);
             }
-            for (int i = 0; i < totalLines; ++i) {
-                if (linePages[i] == page) {
-                    lineFontIds[i] = fid;
+            for (int i = 0; i < entry.totalLines; ++i) {
+                if (entry.linePages[i] == page) {
+                    entry.lineFontIds[i] = fid;
                 }
             }
         }
 
-        // Now measure each page with its actual page font
         for (int32_t page : uniquePages) {
             uint16_t pageFontId = FontManager::kInvalidFontId;
-            for (int i = 0; i < totalLines; ++i) {
-                if (linePages[i] == page) {
-                    pageFontId = lineFontIds[i];
+            for (int i = 0; i < entry.totalLines; ++i) {
+                if (entry.linePages[i] == page) {
+                    pageFontId = entry.lineFontIds[i];
                     break;
                 }
             }
             if (pageFontId == FontManager::kInvalidFontId) continue;
 
             float bestSize = 28.0f;
-            for (float size = 28.0f; size >= 15.0f; size -= 0.1f) {
+            for (float size = 28.0f; size >= 15.0f; size -= 0.5f) {
                 bool allFit = true;
-                for (int i = 0; i < totalLines; ++i) {
-                    if (linePages[i] != page) continue;
-                    float w = MeasureMushafWidth(lineTexts[i], pageFontId, size);
+                for (int i = 0; i < entry.totalLines; ++i) {
+                    if (entry.linePages[i] != page) continue;
+                    float w = MeasureMushafWidth(entry.lineTexts[i], pageFontId, size);
                     if (w > availWidth) { allFit = false; break; }
                 }
                 if (allFit) { bestSize = size; break; }
             }
             LOGI("Mushaf: page %d font size %.1f", page, bestSize);
-            for (int i = 0; i < totalLines; ++i) {
-                if (linePages[i] == page) {
-                    lineFontSizes[i] = bestSize;
+            for (int i = 0; i < entry.totalLines; ++i) {
+                if (entry.linePages[i] == page) {
+                    entry.lineFontSizes[i] = bestSize;
                 }
             }
         }
 
-        sLoaded = true;
+        it = s_cache.emplace(g_selectedSurah, std::move(entry)).first;
+    }
+
+    const MushafCacheEntry& cache = it->second;
+    s_lineStrings.clear();
+    s_lineStrings.reserve(cache.totalLines);
+    for (const auto& s : cache.lineTexts) {
+        s_lineStrings.push_back({
+            .isStaticallyAllocated = false,
+            .length = (int)s.length(),
+            .chars = s.c_str()
+        });
     }
 
     CLAY(
@@ -1312,8 +1309,31 @@ static void LayoutQuranPageMushaf()
                 },
             }
         ) {
-            for (int i = 0; i < totalLines; ++i) {
-                uint16_t fid = lineFontIds[i];
+            for (int i = 0; i < cache.totalLines; ++i) {
+                // Separator before first line of a new page
+                if (i > 0 && cache.linePages[i] != cache.linePages[i - 1]) {
+                    CLAY(
+                        CLAY_IDI("PageSep", i),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(24) },
+                                .padding = { .top = 11 }
+                            },
+                        }
+                    ) {
+                        CLAY(
+                            CLAY_IDI("PageSepCol", i),
+                            {
+                                .layout = {
+                                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
+                                },
+                                .backgroundColor = bg1,
+                            }
+                        ) {}
+                    }
+                }
+
+                uint16_t fid = cache.lineFontIds[i];
                 if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
                     fid = g_arabicFallbackFontId;
                 }
@@ -1324,18 +1344,18 @@ static void LayoutQuranPageMushaf()
                         .layout = {
                             .sizing = { CLAY_SIZING_GROW(0) },
                             .childAlignment = {
-                                .x = lineCentered[i] ? CLAY_ALIGN_X_CENTER : CLAY_ALIGN_X_RIGHT,
+                                .x = cache.lineCentered[i] ? CLAY_ALIGN_X_CENTER : CLAY_ALIGN_X_RIGHT,
                             },
                         },
                     }
                 ) {
                     CLAY_TEXT(
-                        lineStrings[i],
+                        s_lineStrings[i],
                         CLAY_TEXT_CONFIG({
                             .textColor = fg,
                             .fontId = fid,
-                            .fontSize = lineFontSizes[i],
-                            .textAlignment = lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
+                            .fontSize = cache.lineFontSizes[i],
+                            .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
                         })
                     );
                 }
