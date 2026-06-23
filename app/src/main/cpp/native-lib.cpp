@@ -1083,21 +1083,24 @@ struct MushafCacheEntry {
     std::vector<std::string> lineTexts;
     std::vector<bool> lineCentered;
     std::vector<int32_t> linePages;
-    std::vector<int32_t> lineAyahs;
     std::vector<uint16_t> lineFontIds;
     std::vector<float> lineFontSizes;
+    std::vector<int32_t> lineSectionStart;
+    std::vector<std::string> sectionTexts;
+    std::vector<int32_t> sectionAyahs;
     int totalLines = 0;
+    int totalSections = 0;
 };
 
-static std::vector<std::string> g_mushafLineTexts;
-static std::vector<int32_t> g_mushafLineAyahs;
+static std::vector<std::string> g_mushafSectionTexts;
+static std::vector<int32_t> g_mushafSectionAyahs;
 
 static void LayoutQuranPageMushaf()
 {
     static std::unordered_map<int32_t, MushafCacheEntry> s_cache;
     static int s_lastVersion = 0;
     static float s_lastScreenWidth = 0;
-    static std::vector<Clay_String> s_lineStrings;
+    static std::vector<Clay_String> s_sectionStrings;
 
     if (s_lastVersion != g_surfaceVersion || s_lastScreenWidth != g_screenWidthDp) {
         s_cache.clear();
@@ -1123,50 +1126,69 @@ static void LayoutQuranPageMushaf()
                 LOGI("Mushaf: page %d no layout", page);
                 continue;
             }
-            LOGI("Mushaf: page %d has %zu lines", page, layout.lines.size());
 
             for (const auto& pl : layout.lines) {
-                LOGI("Mushaf: line type=%s surah=%d first=%d last=%d centered=%d",
-                     pl.lineType.c_str(), pl.surahNumber, pl.firstWordId, pl.lastWordId, pl.isCentered);
-                if (pl.surahNumber != g_selectedSurah) {
-                    LOGI("Mushaf: skipping line surah %d != %d", pl.surahNumber, g_selectedSurah);
-                    continue;
-                }
+                if (pl.surahNumber != g_selectedSurah) continue;
 
-                std::string text;
+                entry.lineSectionStart.push_back((int32_t)entry.sectionTexts.size());
+                std::string fullText;
+                int32_t ayahNum = 1;
+
                 if (pl.lineType == "surah_name") {
                     const SurahInfo& sinfo = g_quranDb.GetSurahInfo(pl.surahNumber);
-                    text = sinfo.nameArabic;
+                    fullText = sinfo.nameArabic;
+                    entry.sectionTexts.push_back(fullText);
+                    entry.sectionAyahs.push_back(1);
                 } else if (pl.lineType == "basmallah") {
-                    text = "\xD8\xA8\xD9\x90\xD8\xB3\xD9\x92\xD9\x85\xD9\x90 \xD8\xA7\xD9\x84\xD9\x84\xD9\x91\xD9\x87\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x92\xD9\x85\xD9\x8E\xD9\x86\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x90\xD9\x8A\xD9\x85\xD9\x90";
+                    fullText = "\xD8\xA8\xD9\x90\xD8\xB3\xD9\x92\xD9\x85\xD9\x90 \xD8\xA7\xD9\x84\xD9\x84\xD9\x91\xD9\x87\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x92\xD9\x85\xD9\x8E\xD9\x86\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x90\xD9\x8A\xD9\x85\xD9\x90";
+                    entry.sectionTexts.push_back(fullText);
+                    entry.sectionAyahs.push_back(1);
                 } else if (pl.lineType == "ayah") {
-                    int wordCount = 0;
+                    std::vector<std::pair<std::string, int32_t>> wordAyahs;
                     for (int32_t wid = pl.firstWordId; wid <= pl.lastWordId; ++wid) {
-                        const std::string* wordText = g_quranDb.GetWordText(wid);
-                        if (wordText) {
-                            if (!text.empty()) text += ' ';
-                            text += *wordText;
-                            ++wordCount;
+                        const std::string* wt = g_quranDb.GetWordText(wid);
+                        if (wt) {
+                            if (!fullText.empty()) fullText += ' ';
+                            fullText += *wt;
+                            wordAyahs.push_back({*wt, g_quranDb.GetWordAyah(wid)});
                         }
                     }
-                    LOGI("Mushaf: line %d words %d-%d found %d",
-                         pl.lineNumber, pl.firstWordId, pl.lastWordId, wordCount);
+                    if (wordAyahs.empty()) continue;
+
+                    std::vector<std::string> groupTexts;
+                    std::vector<int32_t> groupAyahs;
+                    int32_t curAyah = wordAyahs[0].second;
+                    std::string curGroup = wordAyahs[0].first;
+                    for (size_t wi = 1; wi < wordAyahs.size(); ++wi) {
+                        if (wordAyahs[wi].second == curAyah) {
+                            curGroup += ' ';
+                            curGroup += wordAyahs[wi].first;
+                        } else {
+                            groupTexts.push_back(curGroup);
+                            groupAyahs.push_back(curAyah);
+                            curAyah = wordAyahs[wi].second;
+                            curGroup = wordAyahs[wi].first;
+                        }
+                    }
+                    groupTexts.push_back(curGroup);
+                    groupAyahs.push_back(curAyah);
+                    ayahNum = groupAyahs.front();
+
+                    for (int gi = (int)groupTexts.size() - 1; gi >= 0; --gi) {
+                        entry.sectionTexts.push_back(std::move(groupTexts[gi]));
+                        entry.sectionAyahs.push_back(groupAyahs[gi]);
+                    }
                 }
 
-                int32_t ayahNum = 1;
-                if (pl.lineType == "ayah" && pl.firstWordId > 0)
-                    ayahNum = g_quranDb.GetWordAyah(pl.firstWordId);
-
-                entry.lineTexts.push_back(std::move(text));
+                entry.lineTexts.push_back(std::move(fullText));
                 entry.lineCentered.push_back(pl.isCentered);
                 entry.linePages.push_back(page);
-                entry.lineAyahs.push_back(ayahNum);
                 uniquePages.insert(page);
             }
         }
-        LOGI("Mushaf: total lines %zu", entry.lineTexts.size());
 
         entry.totalLines = (int)entry.lineTexts.size();
+        entry.totalSections = (int)entry.sectionTexts.size();
 
         entry.lineFontIds.assign(entry.totalLines, FontManager::kInvalidFontId);
         entry.lineFontSizes.assign(entry.totalLines, 28.0f);
@@ -1206,7 +1228,6 @@ static void LayoutQuranPageMushaf()
                 }
                 if (allFit) { bestSize = size; break; }
             }
-            LOGI("Mushaf: page %d font size %.1f", page, bestSize);
             for (int i = 0; i < entry.totalLines; ++i) {
                 if (entry.linePages[i] == page) {
                     entry.lineFontSizes[i] = bestSize;
@@ -1216,14 +1237,15 @@ static void LayoutQuranPageMushaf()
 
         it = s_cache.emplace(g_selectedSurah, std::move(entry)).first;
     }
-    const MushafCacheEntry& cache = it->second;
-    g_mushafLineTexts = cache.lineTexts;
-    g_mushafLineAyahs = cache.lineAyahs;
 
-    s_lineStrings.clear();
-    s_lineStrings.reserve(cache.totalLines);
-    for (const auto& s : g_mushafLineTexts) {
-        s_lineStrings.push_back({
+    const MushafCacheEntry& cache = it->second;
+    g_mushafSectionTexts = cache.sectionTexts;
+    g_mushafSectionAyahs = cache.sectionAyahs;
+
+    s_sectionStrings.clear();
+    s_sectionStrings.reserve(cache.totalSections);
+    for (const auto& s : g_mushafSectionTexts) {
+        s_sectionStrings.push_back({
             .isStaticallyAllocated = false,
             .length = (int)s.length(),
             .chars = s.c_str()
@@ -1321,7 +1343,6 @@ static void LayoutQuranPageMushaf()
             }
         ) {
             for (int i = 0; i < cache.totalLines; ++i) {
-                // Separator before first line of a new page
                 if (i > 0 && cache.linePages[i] != cache.linePages[i - 1]) {
                     CLAY(
                         CLAY_IDI("PageSep", i),
@@ -1349,6 +1370,10 @@ static void LayoutQuranPageMushaf()
                     fid = g_arabicFallbackFontId;
                 }
 
+                int sectionStart = cache.lineSectionStart[i];
+                int sectionEnd = (i + 1 < cache.totalLines)
+                    ? cache.lineSectionStart[i + 1] : cache.totalSections;
+
                 CLAY(
                     CLAY_IDI("MushafLine", i),
                     {
@@ -1360,15 +1385,17 @@ static void LayoutQuranPageMushaf()
                         },
                     }
                 ) {
-                    CLAY_TEXT(
-                        s_lineStrings[i],
-                        CLAY_TEXT_CONFIG({
-                            .textColor = fg,
-                            .fontId = fid,
-                            .fontSize = cache.lineFontSizes[i],
-                            .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
-                        })
-                    );
+                    for (int s = sectionStart; s < sectionEnd; ++s) {
+                        CLAY_TEXT(
+                            s_sectionStrings[s],
+                            CLAY_TEXT_CONFIG({
+                                .textColor = fg,
+                                .fontId = fid,
+                                .fontSize = cache.lineFontSizes[i],
+                                .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
+                            })
+                        );
+                    }
                 }
             }
         }
@@ -1495,7 +1522,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         if (elapsedMs >= LONG_PRESS_DURATION_MS) {
             g_longPressFired = true;
             if (g_currentPage == Page::Quran) {
-                if (g_quranDisplayMode == QuranDisplayMode::Mushaf && !g_mushafLineTexts.empty()) {
+                if (g_quranDisplayMode == QuranDisplayMode::Mushaf && !g_mushafSectionTexts.empty()) {
                     LOGI("long press mushaf: scanning %d commands", commands.length);
                     for (int32_t ci = 0; ci < commands.length; ++ci) {
                         const Clay_RenderCommand& cmd = commands.internalArray[ci];
@@ -1504,13 +1531,13 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                         if (g_pointerPos.x >= bb.x && g_pointerPos.x < bb.x + bb.width &&
                             g_pointerPos.y >= bb.y && g_pointerPos.y < bb.y + bb.height) {
                             const char* ptr = cmd.renderData.text.stringContents.chars;
-                            for (int i = 0; i < (int)g_mushafLineTexts.size(); ++i) {
-                                const std::string& line = g_mushafLineTexts[i];
-                                if (!line.empty() && ptr >= line.data() && ptr < line.data() + line.length()) {
-                                    LOGI("  -> matched mushaf line %d ayah %d", i, g_mushafLineAyahs[i]);
+                            for (int i = 0; i < (int)g_mushafSectionTexts.size(); ++i) {
+                                const std::string& section = g_mushafSectionTexts[i];
+                                if (!section.empty() && ptr >= section.data() && ptr < section.data() + section.length()) {
+                                    LOGI("  -> matched mushaf section %d ayah %d", i, g_mushafSectionAyahs[i]);
                                     g_showAyahMenu = true;
                                     g_menuSurah = g_selectedSurah;
-                                    g_menuAyahNumber = g_mushafLineAyahs[i];
+                                    g_menuAyahNumber = g_mushafSectionAyahs[i];
                                     g_menuActivatedThisTouch = true;
                                     g_menuPosX = g_pointerPos.x;
                                     g_menuPosY = g_pointerPos.y;
@@ -1520,7 +1547,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                             if (g_showAyahMenu) break;
                         }
                     }
-                    if (!g_showAyahMenu) LOGI("  no mushaf line matched");
+                    if (!g_showAyahMenu) LOGI("  no mushaf section matched");
                 } else if (!g_ayahTexts.empty()) {
                     LOGI("long press: scanning %d commands", commands.length);
                     for (int32_t ci = 0; ci < commands.length; ++ci) {
