@@ -978,7 +978,162 @@ static void LayoutSurahSelectionPage()
     }
 }
 
-static void LayoutQuranPage()
+struct MushafCacheEntry {
+    std::vector<std::string> lineTexts;
+    std::vector<bool> lineCentered;
+    std::vector<int32_t> linePages;
+    std::vector<uint16_t> lineFontIds;
+    std::vector<float> lineFontSizes;
+    std::vector<int32_t> lineSectionStart;
+    std::vector<std::string> sectionTexts;
+    std::vector<int32_t> sectionAyahs;
+    int totalLines = 0;
+    int totalSections = 0;
+};
+
+static std::vector<std::string> g_mushafSectionTexts;
+static std::vector<int32_t> g_mushafSectionAyahs;
+
+static void LayoutQuranTopBar()
+{
+    CLAY(
+        CLAY_ID("QuranTopBar"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                .childGap = 12,
+                .layoutDirection = CLAY_LEFT_TO_RIGHT,
+            }
+        }
+    ) {
+        CLAY(
+            CLAY_ID("QuranBackButton"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
+                },
+                .backgroundColor = bg1,
+                .cornerRadius = {12, 12, 12, 12},
+            }
+        ) {
+            CLAY_TEXT(
+                CLAY_STRING("<- Back"),
+                CLAY_TEXT_CONFIG({
+                    .textColor = fg,
+                    .fontId = g_roboto18,
+                    .fontSize = 18,
+                    .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                })
+            );
+        }
+
+        { // reciter toggle
+            static std::string s_lastRN;
+            static Clay_String s_str;
+            if (s_lastRN != g_reciterName) {
+                s_lastRN = g_reciterName;
+                s_str = { false, (int)g_reciterName.length(), g_reciterName.c_str() };
+            }
+            CLAY(
+                CLAY_ID("QuranReciterToggle"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                }
+            ) {
+                CLAY_TEXT(
+                    s_str,
+                    CLAY_TEXT_CONFIG({
+                        .textColor = accent,
+                        .fontId = g_roboto18,
+                        .fontSize = 18,
+                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                    })
+                );
+            }
+        }
+
+        CLAY(
+            CLAY_ID("QuranModeToggle"),
+            {
+                .layout = {
+                    .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(48) },
+                    .childAlignment = { .x = CLAY_ALIGN_X_RIGHT, .y = CLAY_ALIGN_Y_CENTER },
+                },
+            }
+        ) {
+            const char* label = (g_quranDisplayMode == QuranDisplayMode::Mushaf)
+                ? "Standard" : "Mushaf";
+            Clay_String sToggleLabel = {
+                .isStaticallyAllocated = true,
+                .length = (int)strlen(label),
+                .chars = label,
+            };
+            CLAY_TEXT(
+                sToggleLabel,
+                CLAY_TEXT_CONFIG({
+                    .textColor = accent,
+                    .fontId = g_roboto18,
+                    .fontSize = 18,
+                    .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                })
+            );
+        }
+    }
+}
+
+static void LayoutQuranControlsBar()
+{
+    if (!g_isPlaying && !g_isPaused) return;
+    CLAY(
+        CLAY_ID("ControlsBar"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                .padding = { .top = 6, .bottom = 6 },
+            },
+            .backgroundColor = bg1,
+            .cornerRadius = {12, 12, 12, 12},
+        }
+    ) {
+        CLAY(CLAY_ID("ControlsSpacer0"), {
+            .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+        }) {}
+        CLAY(CLAY_ID("AudioStop"), {
+            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+            .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
+        }) {}
+        CLAY(CLAY_ID("ControlsSpacer1"), {
+            .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+        }) {}
+        CLAY(CLAY_ID("AudioPrev"), {
+            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+            .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
+        }) {}
+        CLAY(CLAY_ID("ControlsSpacer2"), {
+            .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+        }) {}
+        CLAY(CLAY_ID("AudioPlayPause"), {
+            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+            .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
+        }) {}
+        CLAY(CLAY_ID("ControlsSpacer3"), {
+            .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+        }) {}
+        CLAY(CLAY_ID("AudioNext"), {
+            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+            .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
+        }) {}
+        CLAY(CLAY_ID("ControlsSpacer4"), {
+            .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+        }) {}
+    }
+}
+
+static void LayoutQuranStandardContent()
 {
     static bool sLoaded = false;
     static std::vector<std::string> ayahLines;
@@ -1090,201 +1245,51 @@ static void LayoutQuranPage()
     }
 
     CLAY(
-        CLAY_ID("Root"),
+        CLAY_ID("QuranScrollContainer"),
         {
             .layout = {
                 .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
-                .padding = {
-                    .left = 12,
-                    .right = 12,
-                    .top = (uint16_t)(12 + (int)g_statusBarHeightDp),
-                    .bottom = 12
-                },
-                .childGap = 12,
+                .padding = CLAY_PADDING_ALL(15),
+                .childGap = 16,
                 .layoutDirection = CLAY_TOP_TO_BOTTOM,
             },
-            .backgroundColor = bg,
+            .cornerRadius = {24, 24, 24, 24},
+            .clip = {
+                .vertical = true,
+                .childOffset = Clay_GetScrollOffset()
+            },
         }
     ) {
-        CLAY(
-            CLAY_ID("QuranTopBar"),
+        CLAY_TEXT_CONTAINER(
+            CLAY_ID("AyahContainer"),
             {
                 .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                    .childGap = 12,
-                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                }
+                    .sizing = { CLAY_SIZING_GROW(0) },
+                    .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
+                },
             }
         ) {
-            CLAY(
-                CLAY_ID("QuranBackButton"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
-                    },
-                    .backgroundColor = bg1,
-                    .cornerRadius = {12, 12, 12, 12},
+            for (int i = 0; i < g_totalAyahs; ++i) {
+                uint16_t fid = ayahFontIds[i];
+                if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
+                    fid = g_arabicFallbackFontId;
                 }
-            ) {
-                CLAY_TEXT(
-                    CLAY_STRING("<- Back"),
+
+                int ayahNum = i + 1;
+                bool isPlaying = (g_isPlaying || g_isPaused)
+                    && g_selectedSurah == g_playingSurah
+                    && ayahNum == g_playingAyah;
+
+                CLAY_TEXT_SPAN(
+                    ayahStrings[i],
                     CLAY_TEXT_CONFIG({
                         .textColor = fg,
-                        .fontId = g_roboto18,
-                        .fontSize = 18,
-                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        .fontId = fid,
+                        .fontSize = 28,
+                        .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
+                        .backgroundColor = isPlaying ? bg2 : (Clay_Color){0, 0, 0, 0},
                     })
                 );
-            }
-
-            { // reciter toggle
-                static std::string s_lastRN;
-                static Clay_String s_str;
-                if (s_lastRN != g_reciterName) {
-                    s_lastRN = g_reciterName;
-                    s_str = { false, (int)g_reciterName.length(), g_reciterName.c_str() };
-                }
-                CLAY(
-                    CLAY_ID("QuranReciterToggle"),
-                    {
-                        .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                            .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
-                        },
-                    }
-                ) {
-                    CLAY_TEXT(
-                        s_str,
-                        CLAY_TEXT_CONFIG({
-                            .textColor = accent,
-                            .fontId = g_roboto18,
-                            .fontSize = 18,
-                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                        })
-                    );
-                }
-            }
-
-            CLAY(
-                CLAY_ID("QuranModeToggle"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(48) },
-                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT, .y = CLAY_ALIGN_Y_CENTER },
-                    },
-                }
-            ) {
-                static Clay_String sToggleLabel = {
-                    .isStaticallyAllocated = true,
-                    .length = 6,
-                    .chars = "Mushaf"
-                };
-                CLAY_TEXT(
-                    sToggleLabel,
-                    CLAY_TEXT_CONFIG({
-                        .textColor = accent,
-                        .fontId = g_roboto18,
-                        .fontSize = 18,
-                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                    })
-                );
-            }
-        }
-
-        CLAY(
-            CLAY_ID("QuranScrollContainer"),
-            {
-                .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
-                    .padding = CLAY_PADDING_ALL(15),
-                    .childGap = 16,
-                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                },
-                .cornerRadius = {24, 24, 24, 24},
-                .clip = {
-                    .vertical = true,
-                    .childOffset = Clay_GetScrollOffset()
-                },
-            }
-        ) {
-            CLAY_TEXT_CONTAINER(
-                CLAY_ID("AyahContainer"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0) },
-                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
-                    },
-                }
-            ) {
-                for (int i = 0; i < g_totalAyahs; ++i) {
-                    uint16_t fid = ayahFontIds[i];
-                    if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
-                        fid = g_arabicFallbackFontId;
-                    }
-
-                    int ayahNum = i + 1;
-                    bool isPlaying = (g_isPlaying || g_isPaused)
-                        && g_selectedSurah == g_playingSurah
-                        && ayahNum == g_playingAyah;
-
-                    CLAY_TEXT_SPAN(
-                        ayahStrings[i],
-                        CLAY_TEXT_CONFIG({
-                            .textColor = fg,
-                            .fontId = fid,
-                            .fontSize = 28,
-                            .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
-                            .backgroundColor = isPlaying ? bg2 : (Clay_Color){0, 0, 0, 0},
-                        })
-                    );
-                }
-            }
-        }
-
-        if (g_isPlaying || g_isPaused) {
-            CLAY(
-                CLAY_ID("ControlsBar"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                        .padding = { .top = 6, .bottom = 6 },
-                    },
-                    .backgroundColor = bg1,
-                    .cornerRadius = {12, 12, 12, 12},
-                }
-            ) {
-                CLAY(CLAY_ID("ControlsSpacer0"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioStop"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer1"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioPrev"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer2"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioPlayPause"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer3"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioNext"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer4"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
             }
         }
     }
@@ -1309,27 +1314,10 @@ static float MeasureMushafWidth(const std::string& text, uint16_t fontId, float 
     for (unsigned int i = 0; i < count; ++i)
         total += (float)pos[i].x_advance / 64.0f;
     hb_buffer_destroy(buf);
-    // RTL x_advance is negative; take absolute value for width
     return (total < 0 ? -total : total) / g_density;
 }
 
-struct MushafCacheEntry {
-    std::vector<std::string> lineTexts;
-    std::vector<bool> lineCentered;
-    std::vector<int32_t> linePages;
-    std::vector<uint16_t> lineFontIds;
-    std::vector<float> lineFontSizes;
-    std::vector<int32_t> lineSectionStart;
-    std::vector<std::string> sectionTexts;
-    std::vector<int32_t> sectionAyahs;
-    int totalLines = 0;
-    int totalSections = 0;
-};
-
-static std::vector<std::string> g_mushafSectionTexts;
-static std::vector<int32_t> g_mushafSectionAyahs;
-
-static void LayoutQuranPageMushaf()
+static void LayoutQuranMushafContent()
 {
     static std::unordered_map<int32_t, MushafCacheEntry> s_cache;
     static int s_lastVersion = 0;
@@ -1487,6 +1475,98 @@ static void LayoutQuranPageMushaf()
     }
 
     CLAY(
+        CLAY_ID("MushafScrollContainer"),
+        {
+            .layout = {
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .padding = CLAY_PADDING_ALL(15),
+                .childGap = 8,
+                .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            },
+            .cornerRadius = {24, 24, 24, 24},
+            .clip = {
+                .vertical = true,
+                .childOffset = Clay_GetScrollOffset()
+            },
+        }
+    ) {
+        for (int i = 0; i < cache.totalLines; ++i) {
+            if (i > 0 && cache.linePages[i] != cache.linePages[i - 1]) {
+                CLAY(
+                    CLAY_IDI("PageSep", i),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(24) },
+                            .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        },
+                    }
+                ) {
+                    CLAY(
+                        CLAY_IDI("PageSepLeft", i),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
+                            },
+                            .backgroundColor = bg2,
+                        }
+                    ) {}
+
+                    CLAY(
+                        CLAY_IDI("PageSepRight", i),
+                        {
+                            .layout = {
+                                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
+                            },
+                            .backgroundColor = bg2,
+                        }
+                    ) {}
+                }
+            }
+
+            uint16_t fid = cache.lineFontIds[i];
+            if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
+                fid = g_arabicFallbackFontId;
+            }
+
+            int sectionStart = cache.lineSectionStart[i];
+            int sectionEnd = (i + 1 < cache.totalLines)
+                ? cache.lineSectionStart[i + 1] : cache.totalSections;
+
+            CLAY(
+                CLAY_IDI("MushafLine", i),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0) },
+                        .childAlignment = {
+                            .x = cache.lineCentered[i] ? CLAY_ALIGN_X_CENTER : CLAY_ALIGN_X_RIGHT,
+                        },
+                    },
+                }
+            ) {
+                for (int s = sectionStart; s < sectionEnd; ++s) {
+                    bool secIsPlaying = (g_isPlaying || g_isPaused)
+                        && g_selectedSurah == g_playingSurah
+                        && cache.sectionAyahs[s] == g_playingAyah;
+                    Clay_Color secBg = secIsPlaying ? bg2 : (Clay_Color){0, 0, 0, 0};
+                    CLAY_TEXT(
+                        s_sectionStrings[s],
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = fid,
+                            .fontSize = cache.lineFontSizes[i],
+                            .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
+                            .backgroundColor = secBg,
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
+
+static void LayoutQuranPage()
+{
+    CLAY(
         CLAY_ID("Root"),
         {
             .layout = {
@@ -1503,226 +1583,12 @@ static void LayoutQuranPageMushaf()
             .backgroundColor = bg,
         }
     ) {
-        CLAY(
-            CLAY_ID("QuranTopBar"),
-            {
-                .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                    .childGap = 12,
-                    .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                }
-            }
-        ) {
-            CLAY(
-                CLAY_ID("QuranBackButton"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_FIXED(100), CLAY_SIZING_FIXED(48) },
-                    },
-                    .backgroundColor = bg1,
-                    .cornerRadius = {12, 12, 12, 12},
-                }
-            ) {
-                CLAY_TEXT(
-                    CLAY_STRING("<- Back"),
-                    CLAY_TEXT_CONFIG({
-                        .textColor = fg,
-                        .fontId = g_roboto18,
-                        .fontSize = 18,
-                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                    })
-                );
-            }
-
-            { // reciter toggle
-                static std::string s_lastRN;
-                static Clay_String s_str;
-                if (s_lastRN != g_reciterName) {
-                    s_lastRN = g_reciterName;
-                    s_str = { false, (int)g_reciterName.length(), g_reciterName.c_str() };
-                }
-                CLAY(
-                    CLAY_ID("QuranReciterToggle"),
-                    {
-                        .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                            .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
-                        },
-                    }
-                ) {
-                    CLAY_TEXT(
-                        s_str,
-                        CLAY_TEXT_CONFIG({
-                            .textColor = accent,
-                            .fontId = g_roboto18,
-                            .fontSize = 18,
-                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                        })
-                    );
-                }
-            }
-
-            CLAY(
-                CLAY_ID("QuranModeToggle"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(1), CLAY_SIZING_FIXED(48) },
-                        .childAlignment = { .x = CLAY_ALIGN_X_RIGHT, .y = CLAY_ALIGN_Y_CENTER },
-                    },
-                }
-            ) {
-                static Clay_String sToggleLabel = {
-                    .isStaticallyAllocated = true,
-                    .length = 8,
-                    .chars = "Standard"
-                };
-                CLAY_TEXT(
-                    sToggleLabel,
-                    CLAY_TEXT_CONFIG({
-                        .textColor = accent,
-                        .fontId = g_roboto18,
-                        .fontSize = 18,
-                        .wrapMode = CLAY_TEXT_WRAP_WORDS,
-                    })
-                );
-            }
-        }
-
-        CLAY(
-            CLAY_ID("MushafScrollContainer"),
-            {
-                .layout = {
-                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
-                    .padding = CLAY_PADDING_ALL(15),
-                    .childGap = 8,
-                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                },
-                .cornerRadius = {24, 24, 24, 24},
-                .clip = {
-                    .vertical = true,
-                    .childOffset = Clay_GetScrollOffset()
-                },
-            }
-        ) {
-            for (int i = 0; i < cache.totalLines; ++i) {
-                if (i > 0 && cache.linePages[i] != cache.linePages[i - 1]) {
-                    CLAY(
-                        CLAY_IDI("PageSep", i),
-                        {
-                            .layout = {
-                                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(24) },
-                                .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                            },
-                        }
-                    ) {
-                        CLAY(
-                            CLAY_IDI("PageSepLeft", i),
-                            {
-                                .layout = {
-                                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
-                                },
-                                .backgroundColor = bg2,
-                            }
-                        ) {}
-
-                        CLAY(
-                            CLAY_IDI("PageSepRight", i),
-                            {
-                                .layout = {
-                                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
-                                },
-                                .backgroundColor = bg2,
-                            }
-                        ) {}
-                    }
-                }
-
-                uint16_t fid = cache.lineFontIds[i];
-                if (fid == FontManager::kInvalidFontId || !g_fontManager.GetAtlas(fid)) {
-                    fid = g_arabicFallbackFontId;
-                }
-
-                int sectionStart = cache.lineSectionStart[i];
-                int sectionEnd = (i + 1 < cache.totalLines)
-                    ? cache.lineSectionStart[i + 1] : cache.totalSections;
-
-                CLAY(
-                    CLAY_IDI("MushafLine", i),
-                    {
-                        .layout = {
-                            .sizing = { CLAY_SIZING_GROW(0) },
-                            .childAlignment = {
-                                .x = cache.lineCentered[i] ? CLAY_ALIGN_X_CENTER : CLAY_ALIGN_X_RIGHT,
-                            },
-                        },
-                    }
-                ) {
-                    for (int s = sectionStart; s < sectionEnd; ++s) {
-                        bool secIsPlaying = (g_isPlaying || g_isPaused)
-                            && g_selectedSurah == g_playingSurah
-                            && cache.sectionAyahs[s] == g_playingAyah;
-                        Clay_Color secBg = secIsPlaying ? bg2 : (Clay_Color){0, 0, 0, 0};
-                        CLAY_TEXT(
-                            s_sectionStrings[s],
-                            CLAY_TEXT_CONFIG({
-                                .textColor = fg,
-                                .fontId = fid,
-                                .fontSize = cache.lineFontSizes[i],
-                                .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
-                                .backgroundColor = secBg,
-                            })
-                        );
-                    }
-                }
-            }
-        }
-
-        if (g_isPlaying || g_isPaused) {
-            CLAY(
-                CLAY_ID("ControlsBar"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                        .padding = { .top = 6, .bottom = 6 },
-                    },
-                    .backgroundColor = bg1,
-                    .cornerRadius = {12, 12, 12, 12},
-                }
-            ) {
-                CLAY(CLAY_ID("ControlsSpacer0"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioStop"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer1"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioPrev"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer2"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioPlayPause"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer3"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-                CLAY(CLAY_ID("AudioNext"), {
-                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-                    .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
-                }) {}
-                CLAY(CLAY_ID("ControlsSpacer4"), {
-                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
-                }) {}
-            }
-        }
+        LayoutQuranTopBar();
+        if (g_quranDisplayMode == QuranDisplayMode::Mushaf)
+            LayoutQuranMushafContent();
+        else
+            LayoutQuranStandardContent();
+        LayoutQuranControlsBar();
     }
 }
 
@@ -1741,10 +1607,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 LayoutHomePage();
                 break;
             case Page::Quran:
-                if (g_quranDisplayMode == QuranDisplayMode::Mushaf)
-                    LayoutQuranPageMushaf();
-                else
-                    LayoutQuranPage();
+                LayoutQuranPage();
                 break;
             case Page::SurahSelection:
                 LayoutSurahSelectionPage();
