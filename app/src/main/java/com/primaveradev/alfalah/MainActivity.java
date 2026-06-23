@@ -40,6 +40,22 @@ public class MainActivity extends AppCompatActivity {
     private static MediaPlayer sMediaPlayer;
     private static final Object sPlayerLock = new Object();
 
+    private static int sCurrentSurah = -1;
+    private static int sCurrentAyah = -1;
+    private static boolean sIsPaused = false;
+    private static long sPrevTapTime = 0;
+    private static int sPrevTapCount = 0;
+
+    private static final int[] AYAH_COUNTS = {
+        7, 286, 200, 176, 120, 165, 206, 75, 129, 109, 123, 111, 43, 52, 99, 128,
+        111, 110, 98, 135, 112, 78, 118, 64, 77, 227, 93, 88, 69, 60, 34, 30, 73,
+        54, 45, 83, 182, 88, 75, 85, 54, 53, 89, 59, 37, 35, 38, 29, 18, 45, 60,
+        49, 62, 55, 78, 96, 29, 22, 24, 13, 14, 11, 11, 18, 12, 12, 30, 52, 52,
+        44, 28, 28, 20, 56, 40, 31, 50, 40, 46, 42, 29, 19, 36, 25, 22, 17, 19,
+        26, 30, 20, 15, 21, 11, 8, 8, 19, 5, 8, 8, 11, 11, 8, 3, 9, 5, 4, 7, 3,
+        6, 3, 5, 4, 5, 6
+    };
+
     // Quran Foundation API — pre-production (production returned 404 for recitations)
     private static final String CLIENT_ID = "07aa145f-ab4e-453f-95fa-65c75e2a7e0d";
     private static final String CLIENT_SECRET = "yyttJn5e-N7fpAPUCtnHm4rdos";
@@ -223,6 +239,11 @@ public class MainActivity extends AppCompatActivity {
     // ── Playback ──
 
     public static void playAyah(int surah, int ayah) {
+        sCurrentSurah = surah;
+        sCurrentAyah = ayah;
+        sIsPaused = false;
+        nativeOnPlaybackStateChanged(true, false);
+
         synchronized (sPlayerLock) {
             if (sMediaPlayer != null) {
                 sMediaPlayer.stop();
@@ -238,6 +259,7 @@ public class MainActivity extends AppCompatActivity {
             if (localPath != null && new File(localPath).exists()) {
                 Log.i(TAG, "playAyah: playing from cache " + localPath);
                 playFromPath(localPath);
+                preloadNextAyah();
                 return;
             }
 
@@ -260,6 +282,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.w(TAG, "playAyah: download failed, streaming from URL");
                 playFromPath(path);
             }
+            preloadNextAyah();
         }).start();
     }
 
@@ -278,6 +301,10 @@ public class MainActivity extends AppCompatActivity {
                         mp.release();
                         sMediaPlayer = null;
                     }
+                    // Auto-advance to next ayah with no gap
+                    if (sCurrentSurah >= 0 && sCurrentAyah >= 0) {
+                        nextAyah();
+                    }
                 });
                 sMediaPlayer.setOnErrorListener((mp, what, extra) -> {
                     Log.e(TAG, "playFromPath: error what=" + what + " extra=" + extra);
@@ -293,6 +320,98 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    public static void togglePlayPause() {
+        synchronized (sPlayerLock) {
+            if (sMediaPlayer == null) return;
+            if (sIsPaused) {
+                sMediaPlayer.start();
+                sIsPaused = false;
+            } else {
+                sMediaPlayer.pause();
+                sIsPaused = true;
+            }
+        }
+        nativeOnPlaybackStateChanged(sCurrentSurah >= 0, sIsPaused);
+    }
+
+    public static void stopPlayback() {
+        synchronized (sPlayerLock) {
+            if (sMediaPlayer != null) {
+                sMediaPlayer.stop();
+                sMediaPlayer.release();
+                sMediaPlayer = null;
+            }
+        }
+        sCurrentSurah = -1;
+        sCurrentAyah = -1;
+        sIsPaused = false;
+        sPrevTapCount = 0;
+        nativeOnPlaybackStateChanged(false, false);
+    }
+
+    public static void nextAyah() {
+        if (sCurrentSurah < 0) return;
+        int max = AYAH_COUNTS[sCurrentSurah - 1];
+        int ns = sCurrentSurah;
+        int na = sCurrentAyah + 1;
+        if (na > max) {
+            ns++;
+            if (ns > 114) ns = 1;
+            na = 1;
+        }
+        playAyah(ns, na);
+    }
+
+    public static void prevAyah() {
+        if (sCurrentSurah < 0) return;
+        long now = System.currentTimeMillis();
+        if (sPrevTapCount == 0 || (now - sPrevTapTime) > 500) {
+            sPrevTapCount = 1;
+            sPrevTapTime = now;
+            playAyah(sCurrentSurah, sCurrentAyah);
+        } else {
+            sPrevTapCount = 0;
+            int ps = sCurrentSurah;
+            int pa = sCurrentAyah - 1;
+            if (pa < 1) {
+                ps--;
+                if (ps < 1) ps = 114;
+                pa = AYAH_COUNTS[ps - 1];
+            }
+            playAyah(ps, pa);
+        }
+    }
+
+    private static void preloadNextAyah() {
+        int surah = sCurrentSurah;
+        int ayah = sCurrentAyah;
+        if (surah < 0) return;
+        int max = AYAH_COUNTS[surah - 1];
+        int ns = surah;
+        int na = ayah + 1;
+        if (na > max) {
+            ns++;
+            if (ns > 114) return;
+            na = 1;
+        }
+        final int fSurah = ns;
+        final int fAyah = na;
+        new Thread(() -> {
+            String localPath = getLocalAudioPath(fSurah, fAyah);
+            if (localPath != null && !new File(localPath).exists()) {
+                int reciterId = sReciters[sCurrentReciterIndex].apiId;
+                String slug = sReciters[sCurrentReciterIndex].cdnSlug;
+                String path = fetchAudioUrl(fSurah, fAyah, reciterId);
+                if (path == null) {
+                    path = CDN_BASE + "/" + slug + "/" + String.format("%03d%03d.mp3", fSurah, fAyah);
+                } else if (!path.startsWith("http")) {
+                    path = CDN_BASE + "/" + path;
+                }
+                downloadToFile(path, localPath);
+            }
+        }).start();
+    }
+
     // ── Native methods ──
 
     public native void nativeOnSurfaceCreated(AssetManager assetManager, float density);
@@ -300,6 +419,7 @@ public class MainActivity extends AppCompatActivity {
     public native void nativeOnDrawFrame();
     public native void nativeSetStatusBarHeight(float heightDp);
     public native void nativeOnTouch(float x, float y, boolean down);
+    public static native void nativeOnPlaybackStateChanged(boolean active, boolean paused);
 
     private GLSurfaceView glView;
 

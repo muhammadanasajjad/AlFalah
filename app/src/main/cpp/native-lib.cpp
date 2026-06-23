@@ -117,6 +117,74 @@ static void CallJavaSetReciter(int index) {
     if (needDetach) g_jvm->DetachCurrentThread();
 }
 
+static void CallJavaTogglePlayPause() {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "togglePlayPause", "()V");
+        if (method) env->CallStaticVoidMethod(clazz, method);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+}
+
+static void CallJavaStop() {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "stopPlayback", "()V");
+        if (method) env->CallStaticVoidMethod(clazz, method);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+}
+
+static void CallJavaNextAyah() {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "nextAyah", "()V");
+        if (method) env->CallStaticVoidMethod(clazz, method);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+}
+
+static void CallJavaPrevAyah() {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "prevAyah", "()V");
+        if (method) env->CallStaticVoidMethod(clazz, method);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+}
+
 static ClayRenderer g_clayRenderer;
 static FontManager g_fontManager;
 static uint16_t g_arabicFallbackFontId = FontManager::kInvalidFontId;
@@ -180,6 +248,9 @@ static int g_quranModeVersion = 0;
 static int g_reciterIndex = 0;
 static int g_reciterCount = 0;
 static std::string g_reciterName;
+
+static bool g_isPlaying = false;
+static bool g_isPaused = false;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
@@ -293,6 +364,14 @@ Java_com_primaveradev_alfalah_MainActivity_nativeSetStatusBarHeight(
         JNIEnv*, jobject, jfloat heightDp)
 {
     g_statusBarHeightDp = heightDp;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_primaveradev_alfalah_MainActivity_nativeOnPlaybackStateChanged(
+        JNIEnv*, jobject, jboolean active, jboolean paused)
+{
+    g_isPlaying = active;
+    g_isPaused = paused;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1150,6 +1229,53 @@ static void LayoutQuranPage()
                 }
             }
         }
+
+        if (g_isPlaying || g_isPaused) {
+            CLAY(
+                CLAY_ID("ControlsBar"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        .padding = { .top = 6, .bottom = 6 },
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                CLAY(CLAY_ID("ControlsSpacer0"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioStop"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer1"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioPrev"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer2"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioPlayPause"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer3"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioNext"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer4"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+            }
+        }
     }
 }
 
@@ -1534,6 +1660,53 @@ static void LayoutQuranPageMushaf()
                 }
             }
         }
+
+        if (g_isPlaying || g_isPaused) {
+            CLAY(
+                CLAY_ID("ControlsBar"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                        .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                        .padding = { .top = 6, .bottom = 6 },
+                    },
+                    .backgroundColor = bg1,
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                CLAY(CLAY_ID("ControlsSpacer0"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioStop"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer1"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioPrev"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer2"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioPlayPause"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer3"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+                CLAY(CLAY_ID("AudioNext"), {
+                    .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
+                    .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
+                }) {}
+                CLAY(CLAY_ID("ControlsSpacer4"), {
+                    .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
+                }) {}
+            }
+        }
     }
 }
 
@@ -1746,9 +1919,11 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                         isTap = false;
                     break;
                 case Page::Quran:
-                    if (Clay_PointerOver(CLAY_ID("QuranBackButton")))
+                    if (Clay_PointerOver(CLAY_ID("QuranBackButton"))) {
+                        if (g_isPlaying || g_isPaused) CallJavaStop();
                         targetPage = Page::SurahSelection;
-                    else if (Clay_PointerOver(CLAY_ID("QuranReciterToggle"))) {
+                    } else if (Clay_PointerOver(CLAY_ID("QuranReciterToggle"))) {
+                        if (g_isPlaying || g_isPaused) CallJavaStop();
                         g_reciterIndex = (g_reciterIndex + 1) % g_reciterCount;
                         CallJavaSetReciter(g_reciterIndex);
                         g_reciterName = CallJavaGetReciterName(g_reciterIndex);
@@ -1762,6 +1937,25 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                         ++g_quranModeVersion;
                         isTap = true;
                         targetPage = Page::Quran;
+                    } else if (g_isPlaying || g_isPaused) {
+                        if (Clay_PointerOver(CLAY_ID("AudioStop"))) {
+                            CallJavaStop();
+                            isTap = true;
+                            targetPage = Page::Quran;
+                        } else if (Clay_PointerOver(CLAY_ID("AudioPrev"))) {
+                            CallJavaPrevAyah();
+                            isTap = true;
+                            targetPage = Page::Quran;
+                        } else if (Clay_PointerOver(CLAY_ID("AudioPlayPause"))) {
+                            CallJavaTogglePlayPause();
+                            isTap = true;
+                            targetPage = Page::Quran;
+                        } else if (Clay_PointerOver(CLAY_ID("AudioNext"))) {
+                            CallJavaNextAyah();
+                            isTap = true;
+                            targetPage = Page::Quran;
+                        } else
+                            isTap = false;
                     } else
                         isTap = false;
                     break;
