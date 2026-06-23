@@ -338,6 +338,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
     g_quranDb.Load(mgr);
 
     if (!g_clayArena) {
+        Clay_SetMaxElementCount(32768);
         g_clayArenaSize = Clay_MinMemorySize();
         g_clayArena = malloc(g_clayArenaSize);
         Clay_Initialize(
@@ -1355,9 +1356,8 @@ static void LayoutQuranStandardContent()
             }
         }
 
-        if (g_extraStandardAyahs < 50) {
-            CLAY(
-                CLAY_ID("LoadMoreStandard"),
+        CLAY(
+            CLAY_ID("LoadMoreStandard"),
                 {
                     .layout = {
                         .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
@@ -1382,7 +1382,6 @@ static void LayoutQuranStandardContent()
                     })
                 );
             }
-        }
     }
 }
 
@@ -1722,9 +1721,8 @@ static void LayoutQuranMushafContent()
         }
 
         // Load more button at end of surah
-        if (g_extraMushafPages < 20) {
-            CLAY(
-                CLAY_ID("LoadMoreMushaf"),
+        CLAY(
+            CLAY_ID("LoadMoreMushaf"),
                 {
                     .layout = {
                         .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
@@ -1749,7 +1747,6 @@ static void LayoutQuranMushafContent()
                     })
                 );
             }
-        }
     }
 }
 
