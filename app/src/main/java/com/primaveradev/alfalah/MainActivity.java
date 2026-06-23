@@ -209,7 +209,7 @@ public class MainActivity extends AppCompatActivity {
                  FileOutputStream fos = new FileOutputStream(dest)) {
                 byte[] buf = new byte[8192];
                 int n;
-                while ((n = is.read(buf)) != -1) fos.write(buf);
+                while ((n = is.read(buf)) != -1) fos.write(buf, 0, n);
             }
             Log.i(TAG, "downloadToFile: saved to " + destPath);
             return true;
