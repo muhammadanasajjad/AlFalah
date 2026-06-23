@@ -1,5 +1,6 @@
 package com.primaveradev.alfalah;
 
+import android.content.Context;
 import android.content.res.AssetManager;
 import android.media.MediaPlayer;
 import android.opengl.GLES30;
@@ -13,7 +14,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -41,19 +45,56 @@ public class MainActivity extends AppCompatActivity {
     private static final String CLIENT_SECRET = "yyttJn5e-N7fpAPUCtnHm4rdos";
     private static final String AUTH_URL = "https://prelive-oauth2.quran.foundation/oauth2/token";
     private static final String API_BASE = "https://apis-prelive.quran.foundation";
-    private static final int RECITATION_ID = 7; // Mishari Rashid al-Afasy (Murattal)
+    private static final String CDN_BASE = "https://verses.quran.foundation";
+
+    private static Context sContext = null;
+
+    private static class ReciterInfo {
+        final int apiId;
+        final String displayName;
+        final String cdnSlug;
+        ReciterInfo(int id, String name, String slug) {
+            this.apiId = id;
+            this.displayName = name;
+            this.cdnSlug = slug;
+        }
+    }
+
+    private static final ReciterInfo[] sReciters = {
+        new ReciterInfo(7,  "Al-Afasy",              "Alafasy/mp3"),
+        new ReciterInfo(1,  "AbdulBaset (Mujawwad)", "AbdulBasetAbdulSamad/mp3"),
+    };
+    private static int sCurrentReciterIndex = 0;
 
     private static String sAccessToken = null;
     private static long sTokenExpiry = 0;
 
+    // ── JNI-accessible reciter methods ──
+
+    public static int getReciterCount() {
+        return sReciters.length;
+    }
+
+    public static String getReciterName(int index) {
+        if (index < 0 || index >= sReciters.length) return "";
+        return sReciters[index].displayName;
+    }
+
+    public static void setReciter(int index) {
+        if (index >= 0 && index < sReciters.length) {
+            sCurrentReciterIndex = index;
+            Log.i(TAG, "setReciter: switched to " + sReciters[index].displayName);
+        }
+    }
+
+    // ── Token management ──
+
     private static synchronized String getAccessToken() {
         long now = System.currentTimeMillis() / 1000;
         if (sAccessToken != null && now < sTokenExpiry - 60) {
-            Log.i(TAG, "getAccessToken: using cached token (expires in " + (sTokenExpiry - now) + "s)");
             return sAccessToken;
         }
 
-        Log.i(TAG, "getAccessToken: requesting new token from " + AUTH_URL);
         try {
             URL url = new URL(AUTH_URL);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -72,7 +113,6 @@ public class MainActivity extends AppCompatActivity {
             }
 
             int code = conn.getResponseCode();
-            Log.i(TAG, "getAccessToken: response code " + code);
             if (code != 200) {
                 Log.w(TAG, "getAccessToken: failed with code " + code);
                 return null;
@@ -88,7 +128,6 @@ public class MainActivity extends AppCompatActivity {
             JSONObject json = new JSONObject(sb.toString());
             sAccessToken = json.getString("access_token");
             sTokenExpiry = now + json.getInt("expires_in");
-            Log.i(TAG, "getAccessToken: obtained token, expires in " + json.getInt("expires_in") + "s");
             return sAccessToken;
         } catch (Exception e) {
             Log.e(TAG, "getAccessToken: exception", e);
@@ -96,17 +135,14 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private static String fetchAudioUrl(int surah, int ayah) {
-        Log.i(TAG, "fetchAudioUrl: surah=" + surah + " ayah=" + ayah);
+    // ── URL resolution ──
+
+    private static String fetchAudioUrl(int surah, int ayah, int recitationId) {
         String token = getAccessToken();
-        if (token == null) {
-            Log.w(TAG, "fetchAudioUrl: no access token, falling back");
-            return null;
-        }
+        if (token == null) return null;
 
         String endpoint = API_BASE + "/content/api/v4/chapters/" + surah
-            + "/recitations/" + RECITATION_ID + "?per_page=50";
-        Log.i(TAG, "fetchAudioUrl: hitting " + endpoint);
+            + "/recitations/" + recitationId + "?per_page=50";
 
         try {
             URL url = new URL(endpoint);
@@ -117,11 +153,7 @@ public class MainActivity extends AppCompatActivity {
             conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
-            Log.i(TAG, "fetchAudioUrl: response code " + code);
-            if (code != 200) {
-                Log.w(TAG, "fetchAudioUrl: API returned " + code);
-                return null;
-            }
+            if (code != 200) return null;
 
             BufferedReader br = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
@@ -133,28 +165,66 @@ public class MainActivity extends AppCompatActivity {
             JSONObject json = new JSONObject(sb.toString());
             JSONArray files = json.getJSONArray("audio_files");
             String targetKey = surah + ":" + ayah;
-            Log.i(TAG, "fetchAudioUrl: got " + files.length() + " audio files, looking for " + targetKey);
             for (int i = 0; i < files.length(); i++) {
                 JSONObject f = files.getJSONObject(i);
                 String vk = f.getString("verse_key");
                 if (vk.equals(targetKey)) {
-                    String urlStr = f.getString("url");
-                    Log.i(TAG, "fetchAudioUrl: found URL: " + urlStr);
-                    return urlStr;
+                    return f.getString("url");
                 }
             }
-            Log.w(TAG, "fetchAudioUrl: verse_key " + targetKey + " not found in response");
         } catch (Exception e) {
             Log.e(TAG, "fetchAudioUrl: exception", e);
         }
         return null;
     }
 
+    // ── Local cache ──
+
+    private static String getLocalAudioPath(int surah, int ayah) {
+        if (sContext == null) return null;
+        File dir = new File(sContext.getFilesDir(),
+            "audio/" + sReciters[sCurrentReciterIndex].apiId);
+        dir.mkdirs();
+        return new File(dir, String.format("%03d%03d.mp3", surah, ayah)).getAbsolutePath();
+    }
+
+    private static boolean downloadToFile(String urlStr, String destPath) {
+        try {
+            URL url = new URL(urlStr);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(30000);
+
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                Log.w(TAG, "downloadToFile: server returned " + code);
+                return false;
+            }
+
+            File dest = new File(destPath);
+            File parent = dest.getParentFile();
+            if (parent != null) parent.mkdirs();
+
+            try (InputStream is = conn.getInputStream();
+                 FileOutputStream fos = new FileOutputStream(dest)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) != -1) fos.write(buf);
+            }
+            Log.i(TAG, "downloadToFile: saved to " + destPath);
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "downloadToFile: exception", e);
+            new File(destPath).delete();
+            return false;
+        }
+    }
+
+    // ── Playback ──
+
     public static void playAyah(int surah, int ayah) {
-        Log.i(TAG, "playAyah(" + surah + ", " + ayah + ") called from JNI");
         synchronized (sPlayerLock) {
             if (sMediaPlayer != null) {
-                Log.i(TAG, "playAyah: stopping previous playback");
                 sMediaPlayer.stop();
                 sMediaPlayer.release();
                 sMediaPlayer = null;
@@ -162,52 +232,68 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new Thread(() -> {
-            Log.i(TAG, "playAyah: background thread started");
-            String path = fetchAudioUrl(surah, ayah);
-            if (path == null) {
-                Log.i(TAG, "playAyah: API failed, trying verses.quran.foundation CDN");
-                path = String.format(
-                    "https://verses.quran.foundation/Alafasy/mp3/%03d%03d.mp3",
-                    surah, ayah);
-            } else if (!path.startsWith("http")) {
-                path = "https://verses.quran.foundation/" + path;
-                Log.i(TAG, "playAyah: resolved relative URL to " + path);
-            } else {
-                Log.i(TAG, "playAyah: using absolute URL from API: " + path);
+            String localPath = getLocalAudioPath(surah, ayah);
+
+            // Use cached file if it exists
+            if (localPath != null && new File(localPath).exists()) {
+                Log.i(TAG, "playAyah: playing from cache " + localPath);
+                playFromPath(localPath);
+                return;
             }
-            final String url = path;
-            Log.i(TAG, "playAyah: final audio URL: " + url);
-            synchronized (sPlayerLock) {
-                sMediaPlayer = new MediaPlayer();
-                try {
-                    sMediaPlayer.setDataSource(url);
-                    sMediaPlayer.prepareAsync();
-                    Log.i(TAG, "playAyah: MediaPlayer created, preparing async");
-                    sMediaPlayer.setOnPreparedListener(mp -> {
-                        Log.i(TAG, "playAyah: prepared, starting playback");
-                        mp.start();
-                    });
-                    sMediaPlayer.setOnCompletionListener(mp -> {
-                        Log.i(TAG, "playAyah: playback completed");
-                        synchronized (sPlayerLock) {
-                            mp.release();
-                            sMediaPlayer = null;
-                        }
-                    });
-                    sMediaPlayer.setOnErrorListener((mp, what, extra) -> {
-                        Log.e(TAG, "playAyah: MediaPlayer error what=" + what + " extra=" + extra);
-                        synchronized (sPlayerLock) {
-                            mp.release();
-                            sMediaPlayer = null;
-                        }
-                        return true;
-                    });
-                } catch (IOException e) {
-                    Log.e(TAG, "playAyah: setDataSource exception", e);
-                }
+
+            // Resolve remote URL
+            int reciterId = sReciters[sCurrentReciterIndex].apiId;
+            String slug = sReciters[sCurrentReciterIndex].cdnSlug;
+            String path = fetchAudioUrl(surah, ayah, reciterId);
+
+            if (path == null) {
+                Log.i(TAG, "playAyah: API failed, trying CDN fallback");
+                path = CDN_BASE + "/" + slug + "/" + String.format("%03d%03d.mp3", surah, ayah);
+            } else if (!path.startsWith("http")) {
+                path = CDN_BASE + "/" + path;
+            }
+
+            // Download to cache then play
+            if (localPath != null && downloadToFile(path, localPath)) {
+                playFromPath(localPath);
+            } else {
+                Log.w(TAG, "playAyah: download failed, streaming from URL");
+                playFromPath(path);
             }
         }).start();
     }
+
+    private static void playFromPath(String path) {
+        synchronized (sPlayerLock) {
+            sMediaPlayer = new MediaPlayer();
+            try {
+                sMediaPlayer.setDataSource(path);
+                sMediaPlayer.prepareAsync();
+                sMediaPlayer.setOnPreparedListener(mp -> {
+                    Log.i(TAG, "playFromPath: prepared, starting playback");
+                    mp.start();
+                });
+                sMediaPlayer.setOnCompletionListener(mp -> {
+                    synchronized (sPlayerLock) {
+                        mp.release();
+                        sMediaPlayer = null;
+                    }
+                });
+                sMediaPlayer.setOnErrorListener((mp, what, extra) -> {
+                    Log.e(TAG, "playFromPath: error what=" + what + " extra=" + extra);
+                    synchronized (sPlayerLock) {
+                        mp.release();
+                        sMediaPlayer = null;
+                    }
+                    return true;
+                });
+            } catch (IOException e) {
+                Log.e(TAG, "playFromPath: setDataSource exception", e);
+            }
+        }
+    }
+
+    // ── Native methods ──
 
     public native void nativeOnSurfaceCreated(AssetManager assetManager, float density);
     public native void nativeOnSurfaceChanged(int width, int height);
@@ -220,10 +306,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        sContext = getApplicationContext();
 
         glView = new GLSurfaceView(this);
 
-        // Request OpenGL ES 3.0
         glView.setEGLContextClientVersion(3);
 
         glView.setRenderer(new GLSurfaceView.Renderer() {

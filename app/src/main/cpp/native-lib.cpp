@@ -55,6 +55,68 @@ static void CallJavaPlayAyah(int surah, int ayah) {
     }
 }
 
+static int CallJavaGetReciterCount() {
+    if (!g_jvm) return 0;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    int count = 0;
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "getReciterCount", "()I");
+        if (method) count = env->CallStaticIntMethod(clazz, method);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+    return count;
+}
+
+static std::string CallJavaGetReciterName(int index) {
+    if (!g_jvm) return "";
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    std::string name;
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "getReciterName", "(I)Ljava/lang/String;");
+        if (method) {
+            jstring jName = (jstring)env->CallStaticObjectMethod(clazz, method, index);
+            if (jName) {
+                const char* utf = env->GetStringUTFChars(jName, nullptr);
+                if (utf) { name = utf; env->ReleaseStringUTFChars(jName, utf); }
+                env->DeleteLocalRef(jName);
+            }
+        }
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+    return name;
+}
+
+static void CallJavaSetReciter(int index) {
+    if (!g_jvm) return;
+    JNIEnv* env;
+    bool needDetach = false;
+    jint ret = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (ret != JNI_OK) {
+        g_jvm->AttachCurrentThread(&env, nullptr);
+        needDetach = true;
+    }
+    jclass clazz = env->FindClass("com/primaveradev/alfalah/MainActivity");
+    if (clazz) {
+        jmethodID method = env->GetStaticMethodID(clazz, "setReciter", "(I)V");
+        if (method) env->CallStaticVoidMethod(clazz, method, index);
+    }
+    if (needDetach) g_jvm->DetachCurrentThread();
+}
+
 static ClayRenderer g_clayRenderer;
 static FontManager g_fontManager;
 static uint16_t g_arabicFallbackFontId = FontManager::kInvalidFontId;
@@ -114,6 +176,10 @@ static int g_surfaceVersion = 0;
 enum class QuranDisplayMode { Standard, Mushaf };
 static QuranDisplayMode g_quranDisplayMode = QuranDisplayMode::Standard;
 static int g_quranModeVersion = 0;
+
+static int g_reciterIndex = 0;
+static int g_reciterCount = 0;
+static std::string g_reciterName;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
@@ -206,6 +272,9 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnSurfaceCreated(
             (Clay_ErrorHandler){ 0 });
     }
     Clay_SetMeasureTextFunction(MeasureText, nullptr);
+
+    g_reciterCount = CallJavaGetReciterCount();
+    g_reciterName = CallJavaGetReciterName(0);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -984,6 +1053,34 @@ static void LayoutQuranPage()
                 );
             }
 
+            { // reciter toggle
+                static std::string s_lastRN;
+                static Clay_String s_str;
+                if (s_lastRN != g_reciterName) {
+                    s_lastRN = g_reciterName;
+                    s_str = { false, (int)g_reciterName.length(), g_reciterName.c_str() };
+                }
+                CLAY(
+                    CLAY_ID("QuranReciterToggle"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                            .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                        },
+                    }
+                ) {
+                    CLAY_TEXT(
+                        s_str,
+                        CLAY_TEXT_CONFIG({
+                            .textColor = accent,
+                            .fontId = g_roboto18,
+                            .fontSize = 18,
+                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        })
+                    );
+                }
+            }
+
             CLAY(
                 CLAY_ID("QuranModeToggle"),
                 {
@@ -1300,6 +1397,34 @@ static void LayoutQuranPageMushaf()
                 );
             }
 
+            { // reciter toggle
+                static std::string s_lastRN;
+                static Clay_String s_str;
+                if (s_lastRN != g_reciterName) {
+                    s_lastRN = g_reciterName;
+                    s_str = { false, (int)g_reciterName.length(), g_reciterName.c_str() };
+                }
+                CLAY(
+                    CLAY_ID("QuranReciterToggle"),
+                    {
+                        .layout = {
+                            .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                            .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                        },
+                    }
+                ) {
+                    CLAY_TEXT(
+                        s_str,
+                        CLAY_TEXT_CONFIG({
+                            .textColor = accent,
+                            .fontId = g_roboto18,
+                            .fontSize = 18,
+                            .wrapMode = CLAY_TEXT_WRAP_WORDS,
+                        })
+                    );
+                }
+            }
+
             CLAY(
                 CLAY_ID("QuranModeToggle"),
                 {
@@ -1349,12 +1474,22 @@ static void LayoutQuranPageMushaf()
                         {
                             .layout = {
                                 .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(24) },
-                                .padding = { .top = 11 }
+                                .layoutDirection = CLAY_LEFT_TO_RIGHT,
                             },
                         }
                     ) {
                         CLAY(
-                            CLAY_IDI("PageSepCol", i),
+                            CLAY_IDI("PageSepLeft", i),
+                            {
+                                .layout = {
+                                    .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
+                                },
+                                .backgroundColor = bg1,
+                            }
+                        ) {}
+
+                        CLAY(
+                            CLAY_IDI("PageSepRight", i),
                             {
                                 .layout = {
                                     .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
@@ -1613,7 +1748,13 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                 case Page::Quran:
                     if (Clay_PointerOver(CLAY_ID("QuranBackButton")))
                         targetPage = Page::SurahSelection;
-                    else if (Clay_PointerOver(CLAY_ID("QuranModeToggle"))) {
+                    else if (Clay_PointerOver(CLAY_ID("QuranReciterToggle"))) {
+                        g_reciterIndex = (g_reciterIndex + 1) % g_reciterCount;
+                        CallJavaSetReciter(g_reciterIndex);
+                        g_reciterName = CallJavaGetReciterName(g_reciterIndex);
+                        isTap = true;
+                        targetPage = Page::Quran;
+                    } else if (Clay_PointerOver(CLAY_ID("QuranModeToggle"))) {
                         if (g_quranDisplayMode == QuranDisplayMode::Standard)
                             g_quranDisplayMode = QuranDisplayMode::Mushaf;
                         else
