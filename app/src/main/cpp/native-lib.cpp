@@ -1233,6 +1233,7 @@ static void LayoutQuranStandardContent()
         if (toAdd > 0) {
             int curSurah = g_selectedSurah;
             int remaining = toAdd;
+            g_ayahTexts.reserve(g_ayahTexts.size() + (size_t)toAdd + 50);
             while (remaining > 0 && curSurah < 114) {
                 curSurah++;
                 const Surah& next = g_quranDb.GetSurah(curSurah);
@@ -1273,6 +1274,18 @@ static void LayoutQuranStandardContent()
                 remaining -= take;
             }
             s_loadedExtraAyahs = g_extraStandardAyahs;
+
+            // g_ayahTexts.push_back may have reallocated, invalidating
+            // all existing ayahStrings[].chars pointers — rebuild them
+            ayahStrings.clear();
+            ayahStrings.reserve(g_ayahTexts.size());
+            for (auto& s : g_ayahTexts) {
+                ayahStrings.push_back({
+                    .isStaticallyAllocated = false,
+                    .length = (int)s.length(),
+                    .chars = s.c_str()
+                });
+            }
         }
     }
 
