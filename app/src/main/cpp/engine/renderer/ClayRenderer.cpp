@@ -344,6 +344,11 @@ void ClayRenderer::Render(const Clay_RenderCommandArray& commands)
                     }
                 }
 
+                if (radius.topLeft > std::min(sw, sh) / 2) radius.topLeft = std::min(sw, sh) / 2;
+                if (radius.topRight > std::min(sw, sh) / 2) radius.topRight = std::min(sw, sh) / 2;
+                if (radius.bottomLeft > std::min(sw, sh) / 2) radius.bottomLeft = std::min(sw, sh) / 2;
+                if (radius.bottomRight > std::min(sw, sh) / 2) radius.bottomRight = std::min(sw, sh) / 2;
+
                 PushScissor(sx, sy, sw, sh, radius);
                 break;
             }
@@ -370,6 +375,11 @@ void ClayRenderer::DrawRect(float x, float y, float w, float h, Clay_Color color
 {
     float rx = x * density, ry = y * density;
     float rw = w * density, rh = h * density;
+
+    if (corners.topLeft > std::min(w, h) / 2) corners.topLeft = std::min(w, h) / 2;
+    if (corners.topRight > std::min(w, h) / 2) corners.topRight = std::min(w, h) / 2;
+    if (corners.bottomLeft > std::min(w, h) / 2) corners.bottomLeft = std::min(w, h) / 2;
+    if (corners.bottomRight > std::min(w, h) / 2) corners.bottomRight = std::min(w, h) / 2;
 
     float verts[] = {
             rx,     ry,

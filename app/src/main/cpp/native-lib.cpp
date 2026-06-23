@@ -371,7 +371,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeSetStatusBarHeight(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_primaveradev_alfalah_MainActivity_nativeOnPlaybackStateChanged(
-        JNIEnv*, jobject, jboolean active, jboolean paused, jint surah, jint ayah)
+        JNIEnv*, jclass clazz, jboolean active, jboolean paused, jint surah, jint ayah)
 {
     g_isPlaying = active;
     g_isPaused = paused;
@@ -1091,41 +1091,42 @@ static void LayoutQuranControlsBar()
         CLAY_ID("ControlsBar"),
         {
             .layout = {
-                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                .sizing = { CLAY_SIZING_GROW(0) },
+                .padding = { .top = 12, .bottom = 12 },
+                .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
                 .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                .padding = { .top = 6, .bottom = 6 },
             },
             .backgroundColor = bg1,
-            .cornerRadius = {12, 12, 12, 12},
+            .cornerRadius = {50, 50, 50, 50},
         }
     ) {
         CLAY(CLAY_ID("ControlsSpacer0"), {
             .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
         }) {}
         CLAY(CLAY_ID("AudioStop"), {
-            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-            .image = { .imageData = ImageLoader::Get("images/stopGreen.png") },
+            .layout = { .sizing = {CLAY_SIZING_FIXED(32), CLAY_SIZING_FIXED(32)} },
+            .image = { .imageData = ImageLoader::Get("images/square-solid.png") },
         }) {}
         CLAY(CLAY_ID("ControlsSpacer1"), {
             .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
         }) {}
         CLAY(CLAY_ID("AudioPrev"), {
-            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-            .image = { .imageData = ImageLoader::Get("images/backGreen.png") },
+            .layout = { .sizing = {CLAY_SIZING_FIXED(28), CLAY_SIZING_FIXED(28)} },
+            .image = { .imageData = ImageLoader::Get("images/rewind-solid.png") },
         }) {}
         CLAY(CLAY_ID("ControlsSpacer2"), {
             .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
         }) {}
         CLAY(CLAY_ID("AudioPlayPause"), {
-            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-            .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/playGreen.png" : "images/pauseGreen.png") },
+            .layout = { .sizing = {CLAY_SIZING_FIXED(28), CLAY_SIZING_FIXED(28)} },
+            .image = { .imageData = ImageLoader::Get(g_isPaused ? "images/play-solid.png" : "images/pause-solid.png") },
         }) {}
         CLAY(CLAY_ID("ControlsSpacer3"), {
             .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
         }) {}
         CLAY(CLAY_ID("AudioNext"), {
-            .layout = { .sizing = {CLAY_SIZING_FIXED(36), CLAY_SIZING_FIXED(36)} },
-            .image = { .imageData = ImageLoader::Get("images/forwardGreen.png") },
+            .layout = { .sizing = {CLAY_SIZING_FIXED(28), CLAY_SIZING_FIXED(28)} },
+            .image = { .imageData = ImageLoader::Get("images/forward-solid.png") },
         }) {}
         CLAY(CLAY_ID("ControlsSpacer4"), {
             .layout = { .sizing = {CLAY_SIZING_GROW(0)} },
@@ -1260,12 +1261,13 @@ static void LayoutQuranStandardContent()
             },
         }
     ) {
-        CLAY_TEXT_CONTAINER(
+        CLAY(
             CLAY_ID("AyahContainer"),
             {
                 .layout = {
                     .sizing = { CLAY_SIZING_GROW(0) },
                     .childAlignment = { .x = CLAY_ALIGN_X_RIGHT },
+                    .layoutDirection = CLAY_TOP_TO_BOTTOM,
                 },
             }
         ) {
@@ -1280,7 +1282,7 @@ static void LayoutQuranStandardContent()
                     && g_selectedSurah == g_playingSurah
                     && ayahNum == g_playingAyah;
 
-                CLAY_TEXT_SPAN(
+                CLAY_TEXT(
                     ayahStrings[i],
                     CLAY_TEXT_CONFIG({
                         .textColor = fg,
@@ -1290,6 +1292,25 @@ static void LayoutQuranStandardContent()
                         .backgroundColor = isPlaying ? bg2 : (Clay_Color){0, 0, 0, 0},
                     })
                 );
+
+                CLAY(
+                    CLAY_IDI("translation", i),
+                    {
+                        .layout = {
+                            .padding = { .top = 15, .bottom = 15 }
+                        }
+                    }
+                ) {
+                    CLAY_TEXT(
+                        CLAY_STRING("test translation to be placed here this is just for test right no because i don't have translations loaded"),
+                        CLAY_TEXT_CONFIG({
+                             .textColor = fg1,
+                             .fontId = g_roboto15,
+                             .fontSize = 15,
+                             .textAlignment = CLAY_TEXT_ALIGN_LEFT,
+                        })
+                    );
+                }
             }
         }
     }
@@ -1506,10 +1527,25 @@ static void LayoutQuranMushafContent()
                         {
                             .layout = {
                                 .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
+                                .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
                             },
                             .backgroundColor = bg2,
                         }
                     ) {}
+                    std::string pageN = std::to_string(cache.linePages[i]);
+                    Clay_String pageNString = {
+                        .isStaticallyAllocated = true,
+                        .length = (int)pageN.length(),
+                        .chars = pageN.c_str()
+                    };
+                    CLAY_TEXT(
+                        pageNString,
+                        CLAY_TEXT_CONFIG({
+                            .textColor = fg,
+                            .fontId = g_roboto15,
+                            .fontSize = 15,
+                        })
+                    );
 
                     CLAY(
                         CLAY_IDI("PageSepRight", i),
@@ -1670,7 +1706,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                 .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
                             },
                             .image = {
-                                .imageData = ImageLoader::Get("images/playGreen.png")
+                                .imageData = ImageLoader::Get("images/play.png")
                             },
                         }
                     ) {}
@@ -1682,7 +1718,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                 .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
                             },
                             .image = {
-                                .imageData = ImageLoader::Get("images/bookmarkGreen.png")
+                                .imageData = ImageLoader::Get("images/bookmark.png")
                             },
                         }
                     ) {}
