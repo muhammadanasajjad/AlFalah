@@ -993,6 +993,8 @@ struct MushafCacheEntry {
 
 static std::vector<std::string> g_mushafSectionTexts;
 static std::vector<int32_t> g_mushafSectionAyahs;
+static int g_extraMushafPages = 0;
+static int g_extraStandardAyahs = 0;
 
 static void LayoutQuranTopBar()
 {
@@ -1144,6 +1146,7 @@ static void LayoutQuranStandardContent()
     static int pendingIdx = 0;
     static int lastVersion = 0;
     static int s_lastSurah = 0;
+    static int s_loadedExtraAyahs = 0;
 
     if (lastVersion != g_surfaceVersion || s_lastSurah != g_selectedSurah) {
         sLoaded = false;
@@ -1155,83 +1158,121 @@ static void LayoutQuranStandardContent()
         g_totalAyahs = 0;
         lastVersion = g_surfaceVersion;
         s_lastSurah = g_selectedSurah;
+        g_extraStandardAyahs = 0;
+        s_loadedExtraAyahs = 0;
     }
 
-    if (!sLoaded) {
-        const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
-        g_totalAyahs = (int)surah.ayahs.size();
-        ayahLines.reserve(g_totalAyahs);
-        ayahStrings.reserve(g_totalAyahs);
+    if (!sLoaded || g_extraStandardAyahs != s_loadedExtraAyahs) {
+        if (!sLoaded) {
+            const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
+            g_totalAyahs = (int)surah.ayahs.size();
+            ayahLines.reserve(g_totalAyahs + 50);
+            ayahStrings.reserve(g_totalAyahs + 50);
 
-        std::unordered_set<int32_t> uniquePages;
-        std::vector<int32_t> ayahPageNumbers;
-        ayahPageNumbers.reserve(g_totalAyahs);
+            std::unordered_set<int32_t> uniquePages;
+            std::vector<int32_t> ayahPageNumbers;
+            ayahPageNumbers.reserve(g_totalAyahs + 50);
 
-        for (const auto& ayah : surah.ayahs) {
-            std::string line;
-            int32_t page = 0;
-            for (const auto& w : ayah.words) {
-                if (!line.empty()) line += ' ';
-                line += w.text;
-                LOGI("%s", w.text.c_str());
-                LOGI("%d", w.pageNumber);
-                if (w.pageNumber > 0) page = w.pageNumber;
+            for (const auto& ayah : surah.ayahs) {
+                std::string line;
+                int32_t page = 0;
+                for (const auto& w : ayah.words) {
+                    if (!line.empty()) line += ' ';
+                    line += w.text;
+                    if (w.pageNumber > 0) page = w.pageNumber;
+                }
+                ayahLines.push_back(std::move(line));
+                ayahPageNumbers.push_back(page);
+                if (page > 0) uniquePages.insert(page);
             }
-            ayahLines.push_back(std::move(line));
-            ayahPageNumbers.push_back(page);
-            if (page > 0) uniquePages.insert(page);
-        }
 
-        for (auto& s : ayahLines) {
-            LOGI("%s", s.c_str());
-            ayahStrings.push_back({
-                .isStaticallyAllocated = false,
-                .length = (int)s.length(),
-                .chars = s.c_str()
-            });
-        }
+            ayahFontIds.assign(g_totalAyahs, FontManager::kInvalidFontId);
+            pendingPages.clear();
 
-        ayahFontIds.assign(g_totalAyahs, FontManager::kInvalidFontId);
-        pendingPages.clear();
+            g_ayahTexts = ayahLines;
+            ayahStrings.clear();
+            for (auto& s : g_ayahTexts) {
+                ayahStrings.push_back({
+                    .isStaticallyAllocated = false,
+                    .length = (int)s.length(),
+                    .chars = s.c_str()
+                });
+            }
 
-        g_ayahTexts = ayahLines;
-        // Rebuild ayahStrings to point to g_ayahTexts data (same memory as long-press check uses)
-        ayahStrings.clear();
-        for (auto& s : g_ayahTexts) {
-            ayahStrings.push_back({
-                .isStaticallyAllocated = false,
-                .length = (int)s.length(),
-                .chars = s.c_str()
-            });
-        }
+            // Create fontIds for each unique page
+            for (int32_t page : uniquePages) {
+                char key[64];
+                snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
+                uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+                for (int i = 0; i < g_totalAyahs; ++i) {
+                    if (ayahPageNumbers[i] == page) {
+                        ayahFontIds[i] = fid;
+                    }
+                }
+                pendingPages.push_back(page);
+            }
 
-        // Create fontIds for each unique page (lazy, not loaded yet)
-        for (int32_t page : uniquePages) {
-            char key[64];
-            snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
-            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
-            for (int i = 0; i < g_totalAyahs; ++i) {
-                if (ayahPageNumbers[i] == page) {
-                    ayahFontIds[i] = fid;
+            // Load first 3 page fonts synchronously
+            int toLoad = std::min(3, (int)pendingPages.size());
+            for (int i = 0; i < toLoad; ++i) {
+                char key[64];
+                snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[i]);
+                uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
+                if (fid != FontManager::kInvalidFontId &&
+                    g_fontManager.EnsureFontLoaded(fid)) {
+                    g_fontManager.Register(fid, g_clayRenderer);
                 }
             }
-            pendingPages.push_back(page);
+            pendingIdx = toLoad;
+            sLoaded = true;
         }
 
-        // Load first 3 page fonts synchronously
-        int toLoad = std::min(3, (int)pendingPages.size());
-        for (int i = 0; i < toLoad; ++i) {
-            char key[64];
-            snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[i]);
-            uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
-            if (fid != FontManager::kInvalidFontId &&
-                g_fontManager.EnsureFontLoaded(fid)) {
-                g_fontManager.Register(fid, g_clayRenderer);
+        // Append extra ayahs from subsequent surahs
+        int toAdd = g_extraStandardAyahs - s_loadedExtraAyahs;
+        if (toAdd > 0) {
+            int curSurah = g_selectedSurah;
+            int remaining = toAdd;
+            while (remaining > 0 && curSurah < 114) {
+                curSurah++;
+                const Surah& next = g_quranDb.GetSurah(curSurah);
+                int take = std::min(remaining, (int)next.ayahs.size());
+                for (int i = 0; i < take; ++i) {
+                    const auto& ayah = next.ayahs[i];
+                    std::string line;
+                    int32_t page = 0;
+                    for (const auto& w : ayah.words) {
+                        if (!line.empty()) line += ' ';
+                        line += w.text;
+                        if (w.pageNumber > 0) page = w.pageNumber;
+                    }
+                    ayahLines.push_back(line);
+                    g_ayahTexts.push_back(line);
+                    ayahStrings.push_back({
+                        .isStaticallyAllocated = false,
+                        .length = (int)line.length(),
+                        .chars = g_ayahTexts.back().c_str()
+                    });
+
+                    uint16_t fid = g_arabicFallbackFontId;
+                    if (page > 0) {
+                        char key[64];
+                        snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
+                        fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+                        bool found = false;
+                        for (int p : pendingPages) { if (p == page) { found = true; break; } }
+                        if (!found) {
+                            pendingPages.push_back(page);
+                            if (g_fontManager.EnsureFontLoaded(fid))
+                                g_fontManager.Register(fid, g_clayRenderer);
+                        }
+                    }
+                    ayahFontIds.push_back(fid);
+                    g_totalAyahs++;
+                }
+                remaining -= take;
             }
+            s_loadedExtraAyahs = g_extraStandardAyahs;
         }
-        pendingIdx = toLoad;
-
-        sLoaded = true;
     }
 
     // Progressively load 5 pending page fonts per frame
@@ -1313,6 +1354,35 @@ static void LayoutQuranStandardContent()
                 }
             }
         }
+
+        if (g_extraStandardAyahs < 50) {
+            CLAY(
+                CLAY_ID("LoadMoreStandard"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = (Clay_Color){70, 130, 180, 255},
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                std::string label = "Load 10 more ayahs \xe2\x96\xbc";
+                Clay_String labelStr = {
+                    .isStaticallyAllocated = false,
+                    .length = (int)label.length(),
+                    .chars = label.c_str()
+                };
+                CLAY_TEXT(
+                    labelStr,
+                    CLAY_TEXT_CONFIG({
+                        .textColor = {255, 255, 255, 255},
+                        .fontId = g_roboto15,
+                        .fontSize = 15,
+                    })
+                );
+            }
+        }
     }
 }
 
@@ -1340,19 +1410,32 @@ static float MeasureMushafWidth(const std::string& text, uint16_t fontId, float 
 
 static void LayoutQuranMushafContent()
 {
-    static std::unordered_map<int32_t, MushafCacheEntry> s_cache;
+    static std::unordered_map<int64_t, MushafCacheEntry> s_cache;
     static int s_lastVersion = 0;
     static float s_lastScreenWidth = 0;
     static std::vector<Clay_String> s_sectionStrings;
+    static int s_lastMushafSurah = 0;
+
+    // Per-page font size cache (computed once, survives surah switches)
+    static std::unordered_map<int32_t, float> s_pageFontSizeCache;
+    static float s_lastFontSizeScreenWidth = 0;
 
     if (s_lastVersion != g_surfaceVersion || s_lastScreenWidth != g_screenWidthDp) {
         s_cache.clear();
+        s_pageFontSizeCache.clear();
         s_lastVersion = g_surfaceVersion;
         s_lastScreenWidth = g_screenWidthDp;
     }
 
-    auto it = s_cache.find(g_selectedSurah);
+    if (g_selectedSurah != s_lastMushafSurah) {
+        g_extraMushafPages = 0;
+        s_lastMushafSurah = g_selectedSurah;
+    }
+
+    int64_t cacheKey = ((int64_t)g_selectedSurah << 32) | (uint32_t)g_extraMushafPages;
+    auto it = s_cache.find(cacheKey);
     if (it == s_cache.end()) {
+        auto tBuild = std::chrono::steady_clock::now();
         MushafCacheEntry entry;
 
         const SurahInfo& info = g_quranDb.GetSurahInfo(g_selectedSurah);
@@ -1364,7 +1447,9 @@ static void LayoutQuranMushafContent()
                 if (w.pageNumber > endPage) endPage = w.pageNumber;
             }
         }
-        LOGI("Mushaf: surah %d pages %d-%d (metadata end=%d)", g_selectedSurah, startPage, endPage, info.endPage);
+        int32_t origEndPage = endPage;
+        endPage += g_extraMushafPages;
+        LOGI("Mushaf: surah %d pages %d-%d (extra=%d, metadata end=%d)", g_selectedSurah, startPage, endPage, g_extraMushafPages, info.endPage);
 
         std::unordered_set<int32_t> uniquePages;
         float availWidth = g_screenWidthDp - 12.0f - 12.0f - 15.0f - 15.0f;
@@ -1440,6 +1525,8 @@ static void LayoutQuranMushafContent()
         entry.lineFontIds.assign(entry.totalLines, FontManager::kInvalidFontId);
         entry.lineFontSizes.assign(entry.totalLines, 28.0f);
 
+        auto tFont = std::chrono::steady_clock::now();
+
         for (int32_t page : uniquePages) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
@@ -1455,7 +1542,19 @@ static void LayoutQuranMushafContent()
             }
         }
 
+        auto tFit = std::chrono::steady_clock::now();
+
         for (int32_t page : uniquePages) {
+            // Check cached page font size
+            auto szIt = s_pageFontSizeCache.find(page);
+            if (szIt != s_pageFontSizeCache.end()) {
+                for (int i = 0; i < entry.totalLines; ++i) {
+                    if (entry.linePages[i] == page)
+                        entry.lineFontSizes[i] = szIt->second;
+                }
+                continue;
+            }
+
             uint16_t pageFontId = FontManager::kInvalidFontId;
             for (int i = 0; i < entry.totalLines; ++i) {
                 if (entry.linePages[i] == page) {
@@ -1480,9 +1579,18 @@ static void LayoutQuranMushafContent()
                     entry.lineFontSizes[i] = bestSize;
                 }
             }
+            s_pageFontSizeCache[page] = bestSize;
         }
 
-        it = s_cache.emplace(g_selectedSurah, std::move(entry)).first;
+        auto tEnd = std::chrono::steady_clock::now();
+        LOGI("MushafCache: surah %d pages %d-%d: build=%lldms font=%lldms fit=%lldms total=%lldms",
+             g_selectedSurah, startPage, endPage,
+             std::chrono::duration_cast<std::chrono::milliseconds>(tFont - tBuild).count(),
+             std::chrono::duration_cast<std::chrono::milliseconds>(tFit - tFont).count(),
+             std::chrono::duration_cast<std::chrono::milliseconds>(tEnd - tFit).count(),
+             std::chrono::duration_cast<std::chrono::milliseconds>(tEnd - tBuild).count());
+
+        it = s_cache.emplace(cacheKey, std::move(entry)).first;
     }
 
     const MushafCacheEntry& cache = it->second;
@@ -1522,6 +1630,7 @@ static void LayoutQuranMushafContent()
                     {
                         .layout = {
                             .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(24) },
+                            .childAlignment = {.y = CLAY_ALIGN_Y_CENTER},
                             .layoutDirection = CLAY_LEFT_TO_RIGHT,
                         },
                     }
@@ -1538,18 +1647,28 @@ static void LayoutQuranMushafContent()
                     ) {}
                     std::string pageN = std::to_string(cache.linePages[i]);
                     Clay_String pageNString = {
-                        .isStaticallyAllocated = false,
+                        .isStaticallyAllocated = true,
                         .length = (int)pageN.length(),
                         .chars = pageN.c_str()
                     };
-                    CLAY_TEXT(
-                        pageNString,
-                        CLAY_TEXT_CONFIG({
-                            .textColor = fg,
-                            .fontId = g_roboto15,
-                            .fontSize = 15,
-                        })
-                    );
+                    CLAY(
+                        CLAY_IDI("pageNumber", i),
+                        {
+                            .layout = {
+                                .padding = {.left = 5, .right = 5}
+                            }
+                        }
+                    ) {
+                        CLAY_TEXT(
+                            pageNString,
+                            CLAY_TEXT_CONFIG({
+                                 .textColor = bg2,
+                                 .fontId = g_roboto15,
+                                 .fontSize = 15,
+                                 .textAlignment = CLAY_TEXT_ALIGN_CENTER,
+                            })
+                        );
+                    }
 
                     CLAY(
                         CLAY_IDI("PageSepRight", i),
@@ -1599,6 +1718,36 @@ static void LayoutQuranMushafContent()
                         })
                     );
                 }
+            }
+        }
+
+        // Load more button at end of surah
+        if (g_extraMushafPages < 20) {
+            CLAY(
+                CLAY_ID("LoadMoreMushaf"),
+                {
+                    .layout = {
+                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
+                        .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
+                    },
+                    .backgroundColor = (Clay_Color){70, 130, 180, 255},
+                    .cornerRadius = {12, 12, 12, 12},
+                }
+            ) {
+                std::string label = "Load 5 more pages \xe2\x96\xbc";
+                Clay_String labelStr = {
+                    .isStaticallyAllocated = false,
+                    .length = (int)label.length(),
+                    .chars = label.c_str()
+                };
+                CLAY_TEXT(
+                    labelStr,
+                    CLAY_TEXT_CONFIG({
+                        .textColor = {255, 255, 255, 255},
+                        .fontId = g_roboto15,
+                        .fontSize = 15,
+                    })
+                );
             }
         }
     }
@@ -1854,6 +2003,14 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                         else
                             g_quranDisplayMode = QuranDisplayMode::Standard;
                         ++g_quranModeVersion;
+                        isTap = true;
+                        targetPage = Page::Quran;
+                    } else if (Clay_PointerOver(CLAY_ID("LoadMoreMushaf"))) {
+                        g_extraMushafPages += 5;
+                        isTap = true;
+                        targetPage = Page::Quran;
+                    } else if (Clay_PointerOver(CLAY_ID("LoadMoreStandard"))) {
+                        g_extraStandardAyahs += 10;
                         isTap = true;
                         targetPage = Page::Quran;
                     } else if (g_isPlaying || g_isPaused) {
