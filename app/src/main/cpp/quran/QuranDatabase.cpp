@@ -289,6 +289,7 @@ void QuranDatabase::LoadSurah(AAssetManager* mgr, int32_t surahNumber)
         }
 
         mWordTextById[wordId] = text;
+        mWordToAyah[wordId] = ayahNum;
 
         ayahMap[ayahNum].ayahNumber = ayahNum;
         ayahMap[ayahNum].words.push_back(std::move(w));
@@ -378,4 +379,13 @@ const std::string* QuranDatabase::GetWordText(int32_t wordId) const
 bool QuranDatabase::HasPageLayout(int32_t pageNumber) const
 {
     return mPageLayouts.find(pageNumber) != mPageLayouts.end();
+}
+
+int32_t QuranDatabase::GetWordAyah(int32_t wordId) const
+{
+    auto it = mWordToAyah.find(wordId);
+    if (it != mWordToAyah.end()) {
+        return it->second;
+    }
+    return 0;
 }

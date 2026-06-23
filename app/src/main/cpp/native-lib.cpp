@@ -1083,10 +1083,14 @@ struct MushafCacheEntry {
     std::vector<std::string> lineTexts;
     std::vector<bool> lineCentered;
     std::vector<int32_t> linePages;
+    std::vector<int32_t> lineAyahs;
     std::vector<uint16_t> lineFontIds;
     std::vector<float> lineFontSizes;
     int totalLines = 0;
 };
+
+static std::vector<std::string> g_mushafLineTexts;
+static std::vector<int32_t> g_mushafLineAyahs;
 
 static void LayoutQuranPageMushaf()
 {
@@ -1149,9 +1153,14 @@ static void LayoutQuranPageMushaf()
                          pl.lineNumber, pl.firstWordId, pl.lastWordId, wordCount);
                 }
 
+                int32_t ayahNum = 1;
+                if (pl.lineType == "ayah" && pl.firstWordId > 0)
+                    ayahNum = g_quranDb.GetWordAyah(pl.firstWordId);
+
                 entry.lineTexts.push_back(std::move(text));
                 entry.lineCentered.push_back(pl.isCentered);
                 entry.linePages.push_back(page);
+                entry.lineAyahs.push_back(ayahNum);
                 uniquePages.insert(page);
             }
         }
@@ -1207,11 +1216,13 @@ static void LayoutQuranPageMushaf()
 
         it = s_cache.emplace(g_selectedSurah, std::move(entry)).first;
     }
-
     const MushafCacheEntry& cache = it->second;
+    g_mushafLineTexts = cache.lineTexts;
+    g_mushafLineAyahs = cache.lineAyahs;
+
     s_lineStrings.clear();
     s_lineStrings.reserve(cache.totalLines);
-    for (const auto& s : cache.lineTexts) {
+    for (const auto& s : g_mushafLineTexts) {
         s_lineStrings.push_back({
             .isStaticallyAllocated = false,
             .length = (int)s.length(),
@@ -1483,34 +1494,62 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
         double elapsedMs = (now - g_pointerDownTime) * 1000.0;
         if (elapsedMs >= LONG_PRESS_DURATION_MS) {
             g_longPressFired = true;
-            if (g_currentPage == Page::Quran && !g_ayahTexts.empty()) {
-                LOGI("long press: scanning %d commands", commands.length);
-                for (int32_t ci = 0; ci < commands.length; ++ci) {
-                    const Clay_RenderCommand& cmd = commands.internalArray[ci];
-                    if (cmd.commandType != CLAY_RENDER_COMMAND_TYPE_TEXT) continue;
-                    const auto& bb = cmd.boundingBox;
-                    if (g_pointerPos.x >= bb.x && g_pointerPos.x < bb.x + bb.width &&
-                        g_pointerPos.y >= bb.y && g_pointerPos.y < bb.y + bb.height) {
-                        const char* ptr = cmd.renderData.text.stringContents.chars;
-                        LOGI("  text cmd at (%.0f,%.0f) chars=%p len=%d", bb.x, bb.y, ptr, cmd.renderData.text.stringContents.length);
-                        for (int i = 0; i < g_totalAyahs; ++i) {
-                            const std::string& ayah = g_ayahTexts[i];
-                            if (!ayah.empty() && ptr >= ayah.data() && ptr < ayah.data() + ayah.length()) {
-                                LOGI("  -> matched ayah %d", i);
-                                const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
-                                g_showAyahMenu = true;
-                                g_menuSurah = g_selectedSurah;
-                                g_menuAyahNumber = surah.ayahs[i].ayahNumber;
-                                g_menuActivatedThisTouch = true;
-                                g_menuPosX = g_pointerPos.x;
-                                g_menuPosY = g_pointerPos.y;
-                                break;
+            if (g_currentPage == Page::Quran) {
+                if (g_quranDisplayMode == QuranDisplayMode::Mushaf && !g_mushafLineTexts.empty()) {
+                    LOGI("long press mushaf: scanning %d commands", commands.length);
+                    for (int32_t ci = 0; ci < commands.length; ++ci) {
+                        const Clay_RenderCommand& cmd = commands.internalArray[ci];
+                        if (cmd.commandType != CLAY_RENDER_COMMAND_TYPE_TEXT) continue;
+                        const auto& bb = cmd.boundingBox;
+                        if (g_pointerPos.x >= bb.x && g_pointerPos.x < bb.x + bb.width &&
+                            g_pointerPos.y >= bb.y && g_pointerPos.y < bb.y + bb.height) {
+                            const char* ptr = cmd.renderData.text.stringContents.chars;
+                            for (int i = 0; i < (int)g_mushafLineTexts.size(); ++i) {
+                                const std::string& line = g_mushafLineTexts[i];
+                                if (!line.empty() && ptr >= line.data() && ptr < line.data() + line.length()) {
+                                    LOGI("  -> matched mushaf line %d ayah %d", i, g_mushafLineAyahs[i]);
+                                    g_showAyahMenu = true;
+                                    g_menuSurah = g_selectedSurah;
+                                    g_menuAyahNumber = g_mushafLineAyahs[i];
+                                    g_menuActivatedThisTouch = true;
+                                    g_menuPosX = g_pointerPos.x;
+                                    g_menuPosY = g_pointerPos.y;
+                                    break;
+                                }
                             }
+                            if (g_showAyahMenu) break;
                         }
-                        if (g_showAyahMenu) break;
                     }
+                    if (!g_showAyahMenu) LOGI("  no mushaf line matched");
+                } else if (!g_ayahTexts.empty()) {
+                    LOGI("long press: scanning %d commands", commands.length);
+                    for (int32_t ci = 0; ci < commands.length; ++ci) {
+                        const Clay_RenderCommand& cmd = commands.internalArray[ci];
+                        if (cmd.commandType != CLAY_RENDER_COMMAND_TYPE_TEXT) continue;
+                        const auto& bb = cmd.boundingBox;
+                        if (g_pointerPos.x >= bb.x && g_pointerPos.x < bb.x + bb.width &&
+                            g_pointerPos.y >= bb.y && g_pointerPos.y < bb.y + bb.height) {
+                            const char* ptr = cmd.renderData.text.stringContents.chars;
+                            LOGI("  text cmd at (%.0f,%.0f) chars=%p len=%d", bb.x, bb.y, ptr, cmd.renderData.text.stringContents.length);
+                            for (int i = 0; i < g_totalAyahs; ++i) {
+                                const std::string& ayah = g_ayahTexts[i];
+                                if (!ayah.empty() && ptr >= ayah.data() && ptr < ayah.data() + ayah.length()) {
+                                    LOGI("  -> matched ayah %d", i);
+                                    const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
+                                    g_showAyahMenu = true;
+                                    g_menuSurah = g_selectedSurah;
+                                    g_menuAyahNumber = surah.ayahs[i].ayahNumber;
+                                    g_menuActivatedThisTouch = true;
+                                    g_menuPosX = g_pointerPos.x;
+                                    g_menuPosY = g_pointerPos.y;
+                                    break;
+                                }
+                            }
+                            if (g_showAyahMenu) break;
+                        }
+                    }
+                    if (!g_showAyahMenu) LOGI("  no ayah matched");
                 }
-                if (!g_showAyahMenu) LOGI("  no ayah matched");
             }
         }
     }

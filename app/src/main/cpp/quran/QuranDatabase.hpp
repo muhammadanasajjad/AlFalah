@@ -62,6 +62,7 @@ public:
     const PageLayout& GetPageLayout(int32_t pageNumber) const;
     int32_t GetWordLine(int32_t wordId) const;
     const std::string* GetWordText(int32_t wordId) const;
+    int32_t GetWordAyah(int32_t wordId) const;
     bool HasPageLayout(int32_t pageNumber) const;
 
 private:
@@ -77,4 +78,5 @@ private:
     std::unordered_map<int32_t, int32_t> mSurahToPage;
     std::unordered_map<int32_t, PageLayout> mPageLayouts;
     std::unordered_map<int32_t, std::string> mWordTextById;
+    std::unordered_map<int32_t, int32_t> mWordToAyah;
 };
