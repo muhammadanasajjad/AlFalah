@@ -232,6 +232,8 @@ static bool g_menuActivatedThisTouch = false;
 static float g_menuPosX = 0, g_menuPosY = 0;
 static std::string g_menuInfoString;
 static std::vector<std::string> g_ayahTexts;
+static std::vector<int> g_ayahSurahNumbers;
+static std::vector<int> g_ayahNumbers;
 static int g_totalAyahs = 0;
 
 static float g_deltaTime = 0.016f;
@@ -988,12 +990,14 @@ struct MushafCacheEntry {
     std::vector<int32_t> lineSectionStart;
     std::vector<std::string> sectionTexts;
     std::vector<int32_t> sectionAyahs;
+    std::vector<int32_t> sectionSurahs;
     int totalLines = 0;
     int totalSections = 0;
 };
 
 static std::vector<std::string> g_mushafSectionTexts;
 static std::vector<int32_t> g_mushafSectionAyahs;
+static std::vector<int32_t> g_mushafSectionSurahs;
 static int g_extraMushafPages = 0;
 static int g_extraStandardAyahs = 0;
 
@@ -1157,6 +1161,8 @@ static void LayoutQuranStandardContent()
         pendingPages.clear();
         pendingIdx = 0;
         g_totalAyahs = 0;
+        g_ayahSurahNumbers.clear();
+        g_ayahNumbers.clear();
         lastVersion = g_surfaceVersion;
         s_lastSurah = g_selectedSurah;
         g_extraStandardAyahs = 0;
@@ -1191,6 +1197,14 @@ static void LayoutQuranStandardContent()
             pendingPages.clear();
 
             g_ayahTexts = ayahLines;
+            g_ayahSurahNumbers.clear();
+            g_ayahSurahNumbers.reserve(g_totalAyahs + 50);
+            g_ayahNumbers.clear();
+            g_ayahNumbers.reserve(g_totalAyahs + 50);
+            for (int ai = 0; ai < g_totalAyahs; ++ai) {
+                g_ayahSurahNumbers.push_back(g_selectedSurah);
+                g_ayahNumbers.push_back(surah.ayahs[ai].ayahNumber);
+            }
             ayahStrings.clear();
             for (auto& s : g_ayahTexts) {
                 ayahStrings.push_back({
@@ -1269,6 +1283,8 @@ static void LayoutQuranStandardContent()
                         }
                     }
                     ayahFontIds.push_back(fid);
+                    g_ayahSurahNumbers.push_back(curSurah);
+                    g_ayahNumbers.push_back(next.ayahs[i].ayahNumber);
                     g_totalAyahs++;
                 }
                 remaining -= take;
@@ -1332,10 +1348,9 @@ static void LayoutQuranStandardContent()
                     fid = g_arabicFallbackFontId;
                 }
 
-                int ayahNum = i + 1;
                 bool isPlaying = (g_isPlaying || g_isPaused)
-                    && g_selectedSurah == g_playingSurah
-                    && ayahNum == g_playingAyah;
+                    && g_ayahSurahNumbers[i] == g_playingSurah
+                    && g_ayahNumbers[i] == g_playingAyah;
 
                 CLAY_TEXT(
                     ayahStrings[i],
@@ -1456,10 +1471,12 @@ static void LayoutQuranMushafContent()
                     fullText = sinfo.nameArabic;
                     entry.sectionTexts.push_back(fullText);
                     entry.sectionAyahs.push_back(1);
+                    entry.sectionSurahs.push_back(pl.surahNumber);
                 } else if (pl.lineType == "basmallah") {
                     fullText = "\xD8\xA8\xD9\x90\xD8\xB3\xD9\x92\xD9\x85\xD9\x90 \xD8\xA7\xD9\x84\xD9\x84\xD9\x91\xD9\x87\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x92\xD9\x85\xD9\x8E\xD9\x86\xD9\x90 \xD8\xA7\xD9\x84\xD8\xB1\xD9\x91\xD8\xAD\xD9\x90\xD9\x8A\xD9\x85\xD9\x90";
                     entry.sectionTexts.push_back(fullText);
                     entry.sectionAyahs.push_back(1);
+                    entry.sectionSurahs.push_back(pl.surahNumber);
                 } else if (pl.lineType == "ayah") {
                     std::vector<std::pair<std::string, int32_t>> wordAyahs;
                     for (int32_t wid = pl.firstWordId; wid <= pl.lastWordId; ++wid) {
@@ -1494,6 +1511,7 @@ static void LayoutQuranMushafContent()
                     for (int gi = (int)groupTexts.size() - 1; gi >= 0; --gi) {
                         entry.sectionTexts.push_back(std::move(groupTexts[gi]));
                         entry.sectionAyahs.push_back(groupAyahs[gi]);
+                        entry.sectionSurahs.push_back(pl.surahNumber);
                     }
                 }
 
@@ -1581,6 +1599,7 @@ static void LayoutQuranMushafContent()
     const MushafCacheEntry& cache = it->second;
     g_mushafSectionTexts = cache.sectionTexts;
     g_mushafSectionAyahs = cache.sectionAyahs;
+    g_mushafSectionSurahs = cache.sectionSurahs;
 
     s_sectionStrings.clear();
     s_sectionStrings.reserve(cache.totalSections);
@@ -1689,7 +1708,7 @@ static void LayoutQuranMushafContent()
             ) {
                 for (int s = sectionStart; s < sectionEnd; ++s) {
                     bool secIsPlaying = (g_isPlaying || g_isPaused)
-                        && g_selectedSurah == g_playingSurah
+                        && cache.sectionSurahs[s] == g_playingSurah
                         && cache.sectionAyahs[s] == g_playingAyah;
                     Clay_Color secBg = secIsPlaying ? bg2 : (Clay_Color){0, 0, 0, 0};
                     CLAY_TEXT(
@@ -1895,7 +1914,7 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                 if (!section.empty() && ptr >= section.data() && ptr < section.data() + section.length()) {
                                     LOGI("  -> matched mushaf section %d ayah %d", i, g_mushafSectionAyahs[i]);
                                     g_showAyahMenu = true;
-                                    g_menuSurah = g_selectedSurah;
+                                    g_menuSurah = g_mushafSectionSurahs[i];
                                     g_menuAyahNumber = g_mushafSectionAyahs[i];
                                     g_menuActivatedThisTouch = true;
                                     g_menuPosX = g_pointerPos.x;
@@ -1921,10 +1940,9 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                                 const std::string& ayah = g_ayahTexts[i];
                                 if (!ayah.empty() && ptr >= ayah.data() && ptr < ayah.data() + ayah.length()) {
                                     LOGI("  -> matched ayah %d", i);
-                                    const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
                                     g_showAyahMenu = true;
-                                    g_menuSurah = g_selectedSurah;
-                                    g_menuAyahNumber = surah.ayahs[i].ayahNumber;
+                                    g_menuSurah = g_ayahSurahNumbers[i];
+                                    g_menuAyahNumber = g_ayahNumbers[i];
                                     g_menuActivatedThisTouch = true;
                                     g_menuPosX = g_pointerPos.x;
                                     g_menuPosY = g_pointerPos.y;
