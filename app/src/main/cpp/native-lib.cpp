@@ -1152,6 +1152,7 @@ static void LayoutQuranStandardContent()
     static int lastVersion = 0;
     static int s_lastSurah = 0;
     static int s_loadedExtraAyahs = 0;
+    static int s_lastStandardModeVersion = 0;
 
     if (lastVersion != g_surfaceVersion || s_lastSurah != g_selectedSurah) {
         sLoaded = false;
@@ -1167,6 +1168,12 @@ static void LayoutQuranStandardContent()
         s_lastSurah = g_selectedSurah;
         g_extraStandardAyahs = 0;
         s_loadedExtraAyahs = 0;
+    }
+
+    if (g_quranModeVersion != s_lastStandardModeVersion) {
+        g_extraStandardAyahs = 0;
+        s_loadedExtraAyahs = 0;
+        s_lastStandardModeVersion = g_quranModeVersion;
     }
 
     if (!sLoaded || g_extraStandardAyahs != s_loadedExtraAyahs) {
@@ -1218,7 +1225,7 @@ static void LayoutQuranStandardContent()
             for (int32_t page : uniquePages) {
                 char key[64];
                 snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
-                uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+                uint16_t fid = g_fontManager.GetOrCreateFontId(key, 16.0f * g_density, true);
                 for (int i = 0; i < g_totalAyahs; ++i) {
                     if (ayahPageNumbers[i] == page) {
                         ayahFontIds[i] = fid;
@@ -1232,7 +1239,7 @@ static void LayoutQuranStandardContent()
             for (int i = 0; i < toLoad; ++i) {
                 char key[64];
                 snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[i]);
-                uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
+                uint16_t fid = g_fontManager.GetFontId(key, 16.0f * g_density);
                 if (fid != FontManager::kInvalidFontId &&
                     g_fontManager.EnsureFontLoaded(fid)) {
                     g_fontManager.Register(fid, g_clayRenderer);
@@ -1273,7 +1280,7 @@ static void LayoutQuranStandardContent()
                     if (page > 0) {
                         char key[64];
                         snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
-                        fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+                        fid = g_fontManager.GetOrCreateFontId(key, 16.0f * g_density, true);
                         bool found = false;
                         for (int p : pendingPages) { if (p == page) { found = true; break; } }
                         if (!found) {
@@ -1309,7 +1316,7 @@ static void LayoutQuranStandardContent()
     for (int i = 0; i < 5 && pendingIdx < (int)pendingPages.size(); ++i, ++pendingIdx) {
         char key[64];
         snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", pendingPages[pendingIdx]);
-        uint16_t fid = g_fontManager.GetFontId(key, 28.0f * g_density);
+        uint16_t fid = g_fontManager.GetFontId(key, 16.0f * g_density);
         if (fid != FontManager::kInvalidFontId &&
             g_fontManager.EnsureFontLoaded(fid)) {
             g_fontManager.Register(fid, g_clayRenderer);
@@ -1414,6 +1421,8 @@ static void LayoutQuranMushafContent()
     static int s_lastVersion = 0;
     static float s_lastScreenWidth = 0;
     static std::vector<Clay_String> s_sectionStrings;
+    static std::vector<std::string> s_pageNumberStrings;
+    static std::vector<Clay_String> s_pageNumberClayStrings;
     static int s_lastMushafSurah = 0;
 
     // Per-page font size cache (computed once, survives surah switches)
@@ -1421,8 +1430,8 @@ static void LayoutQuranMushafContent()
     static float s_lastFontSizeScreenWidth = 0;
 
     if (s_lastVersion != g_surfaceVersion || s_lastScreenWidth != g_screenWidthDp) {
-        s_cache.clear();
-        s_pageFontSizeCache.clear();
+//        s_cache.clear();
+//        s_pageFontSizeCache.clear();
         s_lastVersion = g_surfaceVersion;
         s_lastScreenWidth = g_screenWidthDp;
     }
@@ -1430,6 +1439,14 @@ static void LayoutQuranMushafContent()
     if (g_selectedSurah != s_lastMushafSurah) {
         g_extraMushafPages = 0;
         s_lastMushafSurah = g_selectedSurah;
+    }
+
+    static int s_lastMushafModeVersion = 0;
+    if (g_quranModeVersion != s_lastMushafModeVersion) {
+        g_extraMushafPages = 0;
+        s_cache.clear();
+        s_pageFontSizeCache.clear();
+        s_lastMushafModeVersion = g_quranModeVersion;
     }
 
     int64_t cacheKey = ((int64_t)g_selectedSurah << 32) | (uint32_t)g_extraMushafPages;
@@ -1533,7 +1550,7 @@ static void LayoutQuranMushafContent()
         for (int32_t page : uniquePages) {
             char key[64];
             snprintf(key, sizeof(key), "fonts/quranicFonts/qpc/p%d.ttf", page);
-            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 28.0f * g_density, true);
+            uint16_t fid = g_fontManager.GetOrCreateFontId(key, 16.0f * g_density, true);
             if (fid != FontManager::kInvalidFontId &&
                 g_fontManager.EnsureFontLoaded(fid)) {
                 g_fontManager.Register(fid, g_clayRenderer);
@@ -1611,6 +1628,19 @@ static void LayoutQuranMushafContent()
         });
     }
 
+    s_pageNumberStrings.clear();
+    s_pageNumberClayStrings.clear();
+    s_pageNumberStrings.reserve(cache.totalLines);
+    s_pageNumberClayStrings.reserve(cache.totalLines);
+    for (int i = 0; i < cache.totalLines; ++i) {
+        s_pageNumberStrings.push_back(std::to_string(cache.linePages[i]));
+        s_pageNumberClayStrings.push_back({
+            .isStaticallyAllocated = true,
+            .length = (int)s_pageNumberStrings.back().length(),
+            .chars = s_pageNumberStrings.back().c_str()
+        });
+    }
+
     CLAY(
         CLAY_ID("MushafScrollContainer"),
         {
@@ -1649,12 +1679,6 @@ static void LayoutQuranMushafContent()
                             .backgroundColor = bg2,
                         }
                     ) {}
-                    std::string pageN = std::to_string(cache.linePages[i]);
-                    Clay_String pageNString = {
-                        .isStaticallyAllocated = true,
-                        .length = (int)pageN.length(),
-                        .chars = pageN.c_str()
-                    };
                     CLAY(
                         CLAY_IDI("pageNumber", i),
                         {
@@ -1664,7 +1688,7 @@ static void LayoutQuranMushafContent()
                         }
                     ) {
                         CLAY_TEXT(
-                            pageNString,
+                            s_pageNumberClayStrings[i - 1],
                             CLAY_TEXT_CONFIG({
                                  .textColor = bg2,
                                  .fontId = g_roboto15,
