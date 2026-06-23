@@ -1357,8 +1357,14 @@ static void LayoutQuranMushafContent()
 
         const SurahInfo& info = g_quranDb.GetSurahInfo(g_selectedSurah);
         int32_t startPage = info.startPage;
-        int32_t endPage = info.endPage;
-        LOGI("Mushaf: surah %d pages %d-%d", g_selectedSurah, startPage, endPage);
+        const Surah& surah = g_quranDb.GetSurah(g_selectedSurah);
+        int32_t endPage = startPage;
+        for (const auto& ayah : surah.ayahs) {
+            for (const auto& w : ayah.words) {
+                if (w.pageNumber > endPage) endPage = w.pageNumber;
+            }
+        }
+        LOGI("Mushaf: surah %d pages %d-%d (metadata end=%d)", g_selectedSurah, startPage, endPage, info.endPage);
 
         std::unordered_set<int32_t> uniquePages;
         float availWidth = g_screenWidthDp - 12.0f - 12.0f - 15.0f - 15.0f;
@@ -1371,8 +1377,6 @@ static void LayoutQuranMushafContent()
             }
 
             for (const auto& pl : layout.lines) {
-                if (pl.surahNumber != g_selectedSurah) continue;
-
                 entry.lineSectionStart.push_back((int32_t)entry.sectionTexts.size());
                 std::string fullText;
                 int32_t ayahNum = 1;
@@ -1534,7 +1538,7 @@ static void LayoutQuranMushafContent()
                     ) {}
                     std::string pageN = std::to_string(cache.linePages[i]);
                     Clay_String pageNString = {
-                        .isStaticallyAllocated = true,
+                        .isStaticallyAllocated = false,
                         .length = (int)pageN.length(),
                         .chars = pageN.c_str()
                     };
