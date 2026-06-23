@@ -1355,33 +1355,6 @@ static void LayoutQuranStandardContent()
                 }
             }
         }
-
-        CLAY(
-            CLAY_ID("LoadMoreStandard"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                        .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
-                    },
-                    .backgroundColor = (Clay_Color){70, 130, 180, 255},
-                    .cornerRadius = {12, 12, 12, 12},
-                }
-            ) {
-                std::string label = "Load 10 more ayahs \xe2\x96\xbc";
-                Clay_String labelStr = {
-                    .isStaticallyAllocated = false,
-                    .length = (int)label.length(),
-                    .chars = label.c_str()
-                };
-                CLAY_TEXT(
-                    labelStr,
-                    CLAY_TEXT_CONFIG({
-                        .textColor = {255, 255, 255, 255},
-                        .fontId = g_roboto15,
-                        .fontSize = 15,
-                    })
-                );
-            }
     }
 }
 
@@ -1720,33 +1693,6 @@ static void LayoutQuranMushafContent()
             }
         }
 
-        // Load more button at end of surah
-        CLAY(
-            CLAY_ID("LoadMoreMushaf"),
-                {
-                    .layout = {
-                        .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(48) },
-                        .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER },
-                    },
-                    .backgroundColor = (Clay_Color){70, 130, 180, 255},
-                    .cornerRadius = {12, 12, 12, 12},
-                }
-            ) {
-                std::string label = "Load 5 more pages \xe2\x96\xbc";
-                Clay_String labelStr = {
-                    .isStaticallyAllocated = false,
-                    .length = (int)label.length(),
-                    .chars = label.c_str()
-                };
-                CLAY_TEXT(
-                    labelStr,
-                    CLAY_TEXT_CONFIG({
-                        .textColor = {255, 255, 255, 255},
-                        .fontId = g_roboto15,
-                        .fontSize = 15,
-                    })
-                );
-            }
     }
 }
 
@@ -1878,6 +1824,33 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
     }
     Clay_RenderCommandArray commands = Clay_EndLayout(0);
 
+    // Auto-load more content when scrolled near bottom
+    if (g_currentPage == Page::Quran) {
+        if (g_quranDisplayMode == QuranDisplayMode::Mushaf) {
+            Clay_ScrollContainerData data = Clay_GetScrollContainerData(
+                CLAY_ID("MushafScrollContainer"));
+            if (data.found && data.scrollPosition) {
+                float viewH = data.scrollContainerDimensions.height;
+                float scrollBot = -data.scrollPosition->y + viewH;
+                if (scrollBot >= data.contentDimensions.height - 200.0f) {
+                    LOGI("autoLoad mushaf: scrollBot=%.0f contentH=%.0f extra=%d", scrollBot, data.contentDimensions.height, g_extraMushafPages + 5);
+                    g_extraMushafPages += 5;
+                }
+            }
+        } else {
+            Clay_ScrollContainerData data = Clay_GetScrollContainerData(
+                CLAY_ID("QuranScrollContainer"));
+            if (data.found && data.scrollPosition) {
+                float viewH = data.scrollContainerDimensions.height;
+                float scrollBot = -data.scrollPosition->y + viewH;
+                if (scrollBot >= data.contentDimensions.height - 200.0f) {
+                    LOGI("autoLoad standard: scrollBot=%.0f contentH=%.0f extra=%d", scrollBot, data.contentDimensions.height, g_extraStandardAyahs + 10);
+                    g_extraStandardAyahs += 10;
+                }
+            }
+        }
+    }
+
     double now = std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
@@ -2000,14 +1973,6 @@ Java_com_primaveradev_alfalah_MainActivity_nativeOnDrawFrame(
                         else
                             g_quranDisplayMode = QuranDisplayMode::Standard;
                         ++g_quranModeVersion;
-                        isTap = true;
-                        targetPage = Page::Quran;
-                    } else if (Clay_PointerOver(CLAY_ID("LoadMoreMushaf"))) {
-                        g_extraMushafPages += 5;
-                        isTap = true;
-                        targetPage = Page::Quran;
-                    } else if (Clay_PointerOver(CLAY_ID("LoadMoreStandard"))) {
-                        g_extraStandardAyahs += 10;
                         isTap = true;
                         targetPage = Page::Quran;
                     } else if (g_isPlaying || g_isPaused) {
