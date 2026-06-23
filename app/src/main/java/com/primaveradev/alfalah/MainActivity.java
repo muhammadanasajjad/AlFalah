@@ -242,7 +242,7 @@ public class MainActivity extends AppCompatActivity {
         sCurrentSurah = surah;
         sCurrentAyah = ayah;
         sIsPaused = false;
-        nativeOnPlaybackStateChanged(true, false);
+        nativeOnPlaybackStateChanged(true, false, surah, ayah);
 
         synchronized (sPlayerLock) {
             if (sMediaPlayer != null) {
@@ -331,7 +331,7 @@ public class MainActivity extends AppCompatActivity {
                 sIsPaused = true;
             }
         }
-        nativeOnPlaybackStateChanged(sCurrentSurah >= 0, sIsPaused);
+        nativeOnPlaybackStateChanged(sCurrentSurah >= 0, sIsPaused, sCurrentSurah, sCurrentAyah);
     }
 
     public static void stopPlayback() {
@@ -346,7 +346,7 @@ public class MainActivity extends AppCompatActivity {
         sCurrentAyah = -1;
         sIsPaused = false;
         sPrevTapCount = 0;
-        nativeOnPlaybackStateChanged(false, false);
+        nativeOnPlaybackStateChanged(false, false, -1, -1);
     }
 
     public static void nextAyah() {
@@ -419,7 +419,7 @@ public class MainActivity extends AppCompatActivity {
     public native void nativeOnDrawFrame();
     public native void nativeSetStatusBarHeight(float heightDp);
     public native void nativeOnTouch(float x, float y, boolean down);
-    public static native void nativeOnPlaybackStateChanged(boolean active, boolean paused);
+    public static native void nativeOnPlaybackStateChanged(boolean active, boolean paused, int surah, int ayah);
 
     private GLSurfaceView glView;
 

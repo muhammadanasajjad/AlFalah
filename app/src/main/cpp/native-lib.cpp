@@ -201,6 +201,7 @@ static float g_screenWidthDp = 0;
 static float g_screenHeightDp = 0;
 static Clay_Color bg = { 19, 19, 10, 255 };
 static Clay_Color bg1 = { 31, 31, 22, 255 };
+static Clay_Color bg2 = { 55, 55, 46, 255 };
 static Clay_Color accent = { 0, 128, 66, 255 };
 static Clay_Color accent1 = { 2, 100, 53, 255 };
 static Clay_Color fg = { 255, 255, 255, 255 };
@@ -251,6 +252,8 @@ static std::string g_reciterName;
 
 static bool g_isPlaying = false;
 static bool g_isPaused = false;
+static int g_playingSurah = -1;
+static int g_playingAyah = -1;
 
 static Clay_Dimensions MeasureText(Clay_StringSlice text,
                                     Clay_TextElementConfig* config,
@@ -368,10 +371,12 @@ Java_com_primaveradev_alfalah_MainActivity_nativeSetStatusBarHeight(
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_primaveradev_alfalah_MainActivity_nativeOnPlaybackStateChanged(
-        JNIEnv*, jobject, jboolean active, jboolean paused)
+        JNIEnv*, jobject, jboolean active, jboolean paused, jint surah, jint ayah)
 {
     g_isPlaying = active;
     g_isPaused = paused;
+    g_playingSurah = surah;
+    g_playingAyah = ayah;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1217,6 +1222,11 @@ static void LayoutQuranPage()
                         fid = g_arabicFallbackFontId;
                     }
 
+                    int ayahNum = i + 1;
+                    bool isPlaying = (g_isPlaying || g_isPaused)
+                        && g_selectedSurah == g_playingSurah
+                        && ayahNum == g_playingAyah;
+
                     CLAY_TEXT_SPAN(
                         ayahStrings[i],
                         CLAY_TEXT_CONFIG({
@@ -1224,6 +1234,7 @@ static void LayoutQuranPage()
                             .fontId = fid,
                             .fontSize = 28,
                             .textAlignment = CLAY_TEXT_ALIGN_RIGHT,
+                            .backgroundColor = isPlaying ? bg2 : (Clay_Color){0, 0, 0, 0},
                         })
                     );
                 }
@@ -1610,7 +1621,7 @@ static void LayoutQuranPageMushaf()
                                 .layout = {
                                     .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
                                 },
-                                .backgroundColor = bg1,
+                                .backgroundColor = bg2,
                             }
                         ) {}
 
@@ -1620,7 +1631,7 @@ static void LayoutQuranPageMushaf()
                                 .layout = {
                                     .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) },
                                 },
-                                .backgroundColor = bg1,
+                                .backgroundColor = bg2,
                             }
                         ) {}
                     }
@@ -1647,6 +1658,10 @@ static void LayoutQuranPageMushaf()
                     }
                 ) {
                     for (int s = sectionStart; s < sectionEnd; ++s) {
+                        bool secIsPlaying = (g_isPlaying || g_isPaused)
+                            && g_selectedSurah == g_playingSurah
+                            && cache.sectionAyahs[s] == g_playingAyah;
+                        Clay_Color secBg = secIsPlaying ? bg2 : (Clay_Color){0, 0, 0, 0};
                         CLAY_TEXT(
                             s_sectionStrings[s],
                             CLAY_TEXT_CONFIG({
@@ -1654,6 +1669,7 @@ static void LayoutQuranPageMushaf()
                                 .fontId = fid,
                                 .fontSize = cache.lineFontSizes[i],
                                 .textAlignment = cache.lineCentered[i] ? CLAY_TEXT_ALIGN_CENTER : CLAY_TEXT_ALIGN_RIGHT,
+                                .backgroundColor = secBg,
                             })
                         );
                     }

@@ -396,6 +396,8 @@ typedef struct Clay_TextElementConfig {
     void *userData;
     // The RGBA color of the font to render, conventionally specified as 0-255.
     Clay_Color textColor;
+    // RGBA background color rendered behind the text. Set alpha 0 for no background.
+    Clay_Color backgroundColor;
     // An integer transparently passed to Clay_MeasureText to identify the font to use.
     // The debug view will pass fontId = 0 for its internal text.
     uint16_t fontId;
@@ -3239,6 +3241,16 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
                         if (textElementConfig->textAlignment == CLAY_TEXT_ALIGN_CENTER) {
                             offset /= 2;
                         }
+                        if (textElementConfig->backgroundColor.a > 0) {
+                            Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
+                                .boundingBox = { currentElementBoundingBox.x + offset, currentElementBoundingBox.y + yPosition, wrappedLine->dimensions.width, wrappedLine->dimensions.height },
+                                .renderData = { .rectangle = { .backgroundColor = textElementConfig->backgroundColor } },
+                                .userData = textElementConfig->userData,
+                                .id = Clay__HashNumber(~lineIndex, currentElement->id).id,
+                                .zIndex = root->zIndex,
+                                .commandType = CLAY_RENDER_COMMAND_TYPE_RECTANGLE,
+                            });
+                        }
                         Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
                             .boundingBox = { currentElementBoundingBox.x + offset, currentElementBoundingBox.y + yPosition, wrappedLine->dimensions.width, wrappedLine->dimensions.height },
                             .renderData = { .text = {
@@ -3296,6 +3308,16 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
                                 Clay__ContainerLineFragment *frag = Clay__ContainerLineFragmentArraySlice_Get(fragments, rtlIdx);
                                 Clay__TextSpan *span = &context->textContainerSpans.internalArray[currentElement->containerData.spanStartIndex + frag->spanIndex];
                                 xPosition -= frag->width;
+                                if (span->config.backgroundColor.a > 0) {
+                                    Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
+                                        .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
+                                        .renderData = { .rectangle = { .backgroundColor = span->config.backgroundColor } },
+                                        .userData = span->config.userData,
+                                        .id = Clay__HashNumber(~(uint64_t)rtlIdx, currentElement->id).id,
+                                        .zIndex = root->zIndex,
+                                        .commandType = CLAY_RENDER_COMMAND_TYPE_RECTANGLE,
+                                    });
+                                }
                                 Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
                                     .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
                                     .renderData = { .text = {
@@ -3320,6 +3342,16 @@ void Clay__CalculateFinalLayout(float deltaTime, bool useStoredBoundingBoxes, bo
                             while (ltrIdx < fragIdx) {
                                 Clay__ContainerLineFragment *frag = Clay__ContainerLineFragmentArraySlice_Get(fragments, ltrIdx);
                                 Clay__TextSpan *span = &context->textContainerSpans.internalArray[currentElement->containerData.spanStartIndex + frag->spanIndex];
+                                if (span->config.backgroundColor.a > 0) {
+                                    Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
+                                        .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
+                                        .renderData = { .rectangle = { .backgroundColor = span->config.backgroundColor } },
+                                        .userData = span->config.userData,
+                                        .id = Clay__HashNumber(~(uint64_t)ltrIdx, currentElement->id).id,
+                                        .zIndex = root->zIndex,
+                                        .commandType = CLAY_RENDER_COMMAND_TYPE_RECTANGLE,
+                                    });
+                                }
                                 Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
                                     .boundingBox = { xPosition, currentElementBoundingBox.y + yPosition, frag->width, frag->height },
                                     .renderData = { .text = {
